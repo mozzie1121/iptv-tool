@@ -46,7 +46,7 @@ func (c *Client) GetAllChannelProgramList(ctx context.Context, channels []iptv.C
 			progList, err = c.getGdhdpublicChannelProgramList(ctx, token, &channel)
 		case chProgAPIVsp:
 			progList, err = c.getVspChannelProgramList(ctx, token, &channel)
-		case chProgAPIShangdong:
+		case chProgAPIShandong:
 			progList, err = c.getShandongChannelProgramList(ctx, token, &channel)
 		default:
 			// 自动选择调用EPG的API接口
