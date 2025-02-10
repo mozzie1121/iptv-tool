@@ -15,7 +15,7 @@ headers:
   Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
   User-Agent: "Mozilla/5.0 (X11; Linux x86_64; Fhbw2.0) AppleWebKit"
   Accept-Language: "zh-CN,en-US;q=0.8"
-  X-Requested-With: "com.fiberhome.iptv"
+  X-Requested-With: "com.hisense.iptv"
 # 频道的过滤规则，仅支持正则表达式
 # 获取频道列表时，匹配该规则的频道会被过滤掉
 chExcludeRule: "^.+?(画中画|单音轨|-体验)$"
@@ -36,6 +36,13 @@ chGroupRules:
       - "^(SCTV|CDTV|四川乡村|峨眉电影).*?$" # 四川地方频道
       - "^(浙江|杭州|民生|钱江|教科影视|好易购|西湖|青少体育).+?$" # 浙江地方频道
       - "^(湖北|武汉).+?$" # 湖北地方频道
+      - "^(山东|齐鲁).+?$" # 山东地方频道
+  - name: 青岛
+    rules:
+      - "^(QTV|青岛).+?$"
+      - "^(胶州).+?$"  
+      - "^(莱西).+?$" 
+      - "^(平度|黄岛|即墨|城阳|崂山).+?$"
   - name: 专区
     rules:
       - ".+?专区$"
@@ -55,6 +62,8 @@ logos:
     name: "SCTV$G1"
   - rule: "^CETV-?(.+?)(标清|高清|超清)?$"
     name: "CETV$G1"
+  - rule: "^QTV-?(.+?)(标清|高清|超清)?$" # 匹配青岛电视台台标
+    name: "QTV$G1"
   - rule: "^(.+?)(标清|高清|超清)$" # 通用规则，去掉多余内容
     name: "$G1"
 
