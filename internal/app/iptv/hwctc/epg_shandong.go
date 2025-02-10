@@ -1,162 +1,93 @@
-package hwctc
+package main
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"iptv/internal/app/iptv"
-	"net/http"
-	"time"
+	"os"
 	"strings"
+	"time"
 )
 
 type ShandongChannelProgramListResult struct {
-	Data  []ShandongChannelProgramList `json:"data"`
-	Title []string                `json:"title"`
+	Data []RawProgram `json:"data"`
 }
 
-type ShandongChannelProgramList struct {
-	ProgName     string `json:"progName"`
-	ScrollFlag   int    `json:"scrollFlag"`
-	StartTime    string `json:"startTime"`
-	EndTime      string `json:"endTime"`
-	SubProgName  string `json:"subProgName"`
-	State        string `json:"state"`
-	ProgID       string `json:"progId"`
+type RawProgram struct {
+	ProgName   string `json:"prog_name"`
+	StartTime  string `json:"start_time"`
+	EndTime    string `json:"end_time"`
 }
 
-// getShandongChannelProgramList 获取指定频道的节目单列表（hb）
-func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
-	// 获取未来一天的日期
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, tomorrow.Location())
-
-	// 根据当前频道的时移范围，预估EPG的查询时间范围（加上未来一天）
-	epgBackDay := int(channel.TimeShiftLength.Hours()/24) + 1
-	// 限制EPG查询的最大时间范围
-	if epgBackDay > maxBackDay {
-		epgBackDay = maxBackDay
-	}
-
-	// 从未来一天开始往前，倒查多个日期的节目单
-	dateProgramList := make([]iptv.DateProgram, 0, epgBackDay+1)
-	for i := 0; i <= epgBackDay; i++ {
-		// 获取起止时间
-		startDate := tomorrow.AddDate(0, 0, -i)
-		startTime := startDate.Format("20060102") + " 00:00" // 只获取节目的开始时间
-		endTime := startDate.Format("20060102") + " 23:59"   // 结束时间设置为当天23:59
-
-		// 获取指定日期的节目单列表
-		programList, err := c.getShandongChannelDateProgram(ctx, token, channel.ChannelID, startTime, endTime, 0) // index starts from 0
-		if err != nil {
-			if errors.Is(err, ErrEPGApiNotFound) {
-				return nil, err
-			}
-			c.logger.Sugar().Warnf("Failed to get the program list for channel %s on %s. Error: %v", channel.ChannelName, startDate.Format("20060102"), err)
-			continue
-		}
-
-		dateProgramList = append(dateProgramList, iptv.DateProgram{
-			Date:        startDate,
-			ProgramList: programList,
-		})
-	}
-
-	return &iptv.ChannelProgramList{
-		ChannelId:       channel.ChannelID,
-		ChannelName:     channel.ChannelName,
-		DateProgramList: dateProgramList,
-	}, nil
+type Program struct {
+	ProgramName     string
+	BeginTimeFormat string
+	EndTimeFormat   string
+	StartTime       string
+	EndTime         string
 }
 
-// getShandongChannelDateProgram 获取指定频道的某日期的节目单列表
-func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token, channelId string, startTime string, endTime string, index int) ([]iptv.Program, error) {
-	// 创建请求
-	url := fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp?CHANNELID=%s&index=%d", c.host, channelId, index)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// 假设这是您获取原始 JSON 数据的函数
+func getRawData() ([]byte, error) {
+	// 在这里实现获取数据的逻辑，例如 HTTP 请求
+	// 下面是一个示例的伪数据
+	return []byte(`{"data":[{"prog_name":"节目A","start_time":"01:03:00","end_time":"01:05:00"},{"prog_name":"节目B","start_time":"02:00","end_time":"02:30"}]}`), nil
+}
+
+func writeRawDataToFile(filename string, data []byte) error {
+	file, err := os.Create(filename)
 	if err != nil {
-		return nil, err
+		return err
 	}
+	defer file.Close()
 
-	// 设置请求头
-	c.setCommonHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Requested-With", "com.hisense.iptv")
-
-	// 设置Cookie
-	req.AddCookie(&http.Cookie{
-		Name:  "JSESSIONID",
-		Value: token.JSESSIONID,
-	})
-
-	// 执行请求
-	resp, err := c.httpClient.Do(req)
+	_, err = file.Write(data)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrEPGApiNotFound
-	} else if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http status code: %d", resp.StatusCode)
+		return err
 	}
 
-	// 解析响应内容
-	result, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseShandongChannelDateProgram(result)
+	return nil
 }
 
-// parseShandongChannelDateProgram 解析频道节目单列表
-func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
-	// 解析json
+func parseShandongChannelDateProgram(rawData []byte) ([]Program, error) {
 	var resp ShandongChannelProgramListResult
 	if err := json.Unmarshal(rawData, &resp); err != nil {
 		return nil, err
 	}
 
 	if len(resp.Data) == 0 {
-		return nil, ErrChProgListIsEmpty
+		return nil, errors.New("program list is empty")
 	}
 
-	// 遍历单个日期中的节目单
-	programList := make([]iptv.Program, 0, len(resp.Data))
+	programList := make([]Program, 0, len(resp.Data))
 	for _, rawProg := range resp.Data {
-		// 检查时间字符串是否为空
 		if rawProg.StartTime == "" || rawProg.EndTime == "" {
 			return nil, errors.New("StartTime or EndTime is empty")
 		}
 
-		// 根据需要处理时间字符串，移除秒
+		// 移除秒部分
 		startTimeStr := rawProg.StartTime
 		if strings.Contains(startTimeStr, ":") {
 			parts := strings.Split(startTimeStr, ":")
-			startTimeStr = parts[0] + ":" + parts[1] // 取时和分
+			startTimeStr = parts[0] + ":" + parts[1]
 		}
 
 		endTimeStr := rawProg.EndTime
 		if strings.Contains(endTimeStr, ":") {
 			parts := strings.Split(endTimeStr, ":")
-			endTimeStr = parts[0] + ":" + parts[1] // 取时和分
+			endTimeStr = parts[0] + ":" + parts[1]
 		}
 
-		// 修改时间解析格式为只包含时和分
-		startTime, err := time.Parse("15:04", startTimeStr) // 只解析时和分
+		startTime, err := time.Parse("15:04", startTimeStr)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing StartTime: %v", err)
 		}
-		endTime, err := time.Parse("15:04", endTimeStr) // 只解析时和分
+		endTime, err := time.Parse("15:04", endTimeStr)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing EndTime: %v", err)
 		}
 
-		programList = append(programList, iptv.Program{
+		programList = append(programList, Program{
 			ProgramName:     rawProg.ProgName,
 			BeginTimeFormat: startTime.Format("20060102150405"),
 			EndTimeFormat:   endTime.Format("20060102150405"),
@@ -168,3 +99,31 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 	return programList, nil
 }
 
+func getShandongChannelDateProgram() ([]Program, error) {
+	rawData, err := getRawData()
+	if err != nil {
+		return nil, err
+	}
+
+	// 将未解析的原始数据写入到文件
+	err = writeRawDataToFile("raw_data.json", rawData)
+	if err != nil {
+		return nil, fmt.Errorf("could not write raw data to file: %v", err)
+	}
+
+	// 继续解析 JSON 数据
+	return parseShandongChannelDateProgram(rawData)
+}
+
+func main() {
+	programs, err := getShandongChannelDateProgram()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
+
+	// 打印解析后的节目单
+	for _, program := range programs {
+		fmt.Printf("Program: %s, Start: %s, End: %s\n", program.ProgramName, program.StartTime, program.EndTime)
+	}
+}
