@@ -68,8 +68,8 @@ func (c *Client) getGdhdpublicChannelProgramList(ctx context.Context, token *Tok
 func (c *Client) getGdhdpublicChannelDateProgram(ctx context.Context, token *Token, channelId string, dateStr string) (*iptv.DateProgram, error) {
 	// 创建请求
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		//fmt.Sprintf("http://%s/EPG/jsp/gdhdpublic/Ver.3/common/data.jsp", c.host), nil)
-		fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp", c.host), nil)
+		fmt.Sprintf("http://%s/EPG/jsp/gdhdpublic/Ver.3/common/data.jsp", c.host), nil)
+		//fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp", c.host), nil)
 	if err != nil {
 		return nil, err
 	}
