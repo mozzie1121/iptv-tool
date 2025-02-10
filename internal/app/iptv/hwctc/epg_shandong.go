@@ -8,9 +8,8 @@ import (
 	"io"
 	"iptv/internal/app/iptv"
 	"net/http"
-	"os" // 导入 os 包
-	"time"
 	"strings"
+	"time"
 )
 
 type ShandongChannelProgramListResult struct {
@@ -49,8 +48,14 @@ func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token
 		startTime := startDate.Format("20060102") + " 00:00" // 只获取节目的开始时间
 		endTime := startDate.Format("20060102") + " 23:59"   // 结束时间设置为当天23:59
 
+		// 计算 index
+		index := 0 - i
+		if index < -6 {
+			index = -6
+		}
+
 		// 获取指定日期的节目单列表
-		programList, err := c.getShandongChannelDateProgram(ctx, token, channel.ChannelID, startTime, endTime, 0) // index starts from 0
+		programList, err := c.getShandongChannelDateProgram(ctx, token, channel.ChannelID, startTime, endTime, index) // index starts from 0
 		if err != nil {
 			if errors.Is(err, ErrEPGApiNotFound) {
 				return nil, err
@@ -111,33 +116,12 @@ func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token
 		return nil, err
 	}
 
-	// 在解析之前，写入原始数据到文件
-	err = writeRawDataToFile("raw_data.json", result)
-	if err != nil {
-		return nil, fmt.Errorf("could not write raw data to file: %v", err)
-	}
-
-	return parseShandongChannelDateProgram(result)
-}
-
-// writeRawDataToFile 将原始数据写入到文件中
-func writeRawDataToFile(filename string, data []byte) error {
-	file, err := os.Create(filename)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	_, err = file.Write(data)
-	if err != nil {
-		return err
-	}
-
-	return nil
+	// 解析节目单
+	return parseShandongChannelDateProgram(result, index, time.Now().AddDate(0, 0, 1).AddDate(0, 0, -index))
 }
 
 // parseShandongChannelDateProgram 解析频道节目单列表
-func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
+func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) ([]iptv.Program, error) {
 	// 解析json
 	var resp ShandongChannelProgramListResult
 	if err := json.Unmarshal(rawData, &resp); err != nil {
@@ -156,28 +140,19 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 			return nil, errors.New("StartTime or EndTime is empty")
 		}
 
-		// 根据需要处理时间字符串，移除秒
-		startTimeStr := rawProg.StartTime
-		if strings.Contains(startTimeStr, ":") {
-			parts := strings.Split(startTimeStr, ":")
-			startTimeStr = parts[0] + ":" + parts[1] // 取时和分
-		}
-
-		endTimeStr := rawProg.EndTime
-		if strings.Contains(endTimeStr, ":") {
-			parts := strings.Split(endTimeStr, ":")
-			endTimeStr = parts[0] + ":" + parts[1] // 取时和分
-		}
-
-		// 修改时间解析格式为只包含时和分
-		startTime, err := time.Parse("15:04", startTimeStr) // 只解析时和分
+		// 解析时间并添加日期
+		startTime, err := time.Parse("15:04", rawProg.StartTime)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing StartTime: %v", err)
 		}
-		endTime, err := time.Parse("15:04", endTimeStr) // 只解析时和分
+		endTime, err := time.Parse("15:04", rawProg.EndTime)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing EndTime: %v", err)
 		}
+
+		// 将具体日期和时间合并
+		startTime = time.Date(date.Year(), date.Month(), date.Day(), startTime.Hour(), startTime.Minute(), 0, 0, startTime.Location())
+		endTime = time.Date(date.Year(), date.Month(), date.Day(), endTime.Hour(), endTime.Minute(), 0, 0, endTime.Location())
 
 		programList = append(programList, iptv.Program{
 			ProgramName:     rawProg.ProgName,
