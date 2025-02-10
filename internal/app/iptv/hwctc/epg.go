@@ -92,8 +92,8 @@ func (c *Client) getChannelProgramListByAuto(ctx context.Context, token *Token, 
 		c.config.ChannelProgramAPI = chProgAPIVsp
 		return progList, err
 	}
-	
-	progList, err = c.getShangdongChannelProgramList(ctx, token, channel)
+
+	progList, err = c.getShandongChannelProgramList(ctx, token, channel)
 	if !errors.Is(err, ErrEPGApiNotFound) {
 		c.logger.Info("An available EPG API was found.", zap.String("channelProgramAPI", chProgAPIShandong))
 		c.config.ChannelProgramAPI = chProgAPIShandong
