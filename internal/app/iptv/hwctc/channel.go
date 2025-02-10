@@ -100,7 +100,8 @@ func (c *Client) GetAllChannelList(ctx context.Context) ([]iptv.Channel, error) 
 
 		// channelURL类型转换
 		// channelURL可能同时返回组播和单播多个地址（通过|分割）
-		channelURL := string(matches[4])
+		//channelURL := string(matches[4])
+		channelURL := strings.TrimPrefix(string(matches[4]), "igmp://")
 
 		// TimeShiftLength类型转换
 		timeShiftLength, err := strconv.ParseInt(string(matches[6]), 10, 64)
