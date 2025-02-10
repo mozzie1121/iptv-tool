@@ -126,18 +126,6 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 		return nil, ErrChProgListIsEmpty
 	}
 
-// parseShandongChannelDateProgram 解析频道节目单列表
-func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
-	// 解析json
-	var resp ShandongChannelProgramListResult
-	if err := json.Unmarshal(rawData, &resp); err != nil {
-		return nil, err
-	}
-
-	if len(resp.Data) == 0 {
-		return nil, ErrChProgListIsEmpty
-	}
-
 	// 遍历单个日期中的节目单
 	programList := make([]iptv.Program, 0, len(resp.Data))
 	for _, rawProg := range resp.Data {
@@ -161,6 +149,4 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 	}
 
 	return programList, nil
-}
-
 }
