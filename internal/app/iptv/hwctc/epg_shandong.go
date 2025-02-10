@@ -129,14 +129,19 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 	// 遍历单个日期中的节目单
 	programList := make([]iptv.Program, 0, len(resp.Data))
 	for _, rawProg := range resp.Data {
-		// 修改时间解析格式
-		startTime, err := time.Parse("15:04:05", rawProg.StartTime)
-		if err != nil {
-			return nil, err
+		// 检查时间字符串是否为空
+		if rawProg.StartTime == "" || rawProg.EndTime == "" {
+			return nil, errors.New("StartTime or EndTime is empty")
 		}
-		endTime, err := time.Parse("15:04:05", rawProg.EndTime)
+
+		// 修改时间解析格式为只包含时和分
+		startTime, err := time.Parse("15:04", rawProg.StartTime) // 只解析时和分
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error parsing StartTime: %v", err)
+		}
+		endTime, err := time.Parse("15:04", rawProg.EndTime) // 只解析时和分
+		if err != nil {
+			return nil, fmt.Errorf("error parsing EndTime: %v", err)
 		}
 
 		programList = append(programList, iptv.Program{
@@ -150,3 +155,4 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 
 	return programList, nil
 }
+
