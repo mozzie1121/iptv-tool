@@ -1,7 +1,6 @@
 package hwctc
 
 import (
-	//"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,8 +8,8 @@ import (
 	"io"
 	"iptv/internal/app/iptv"
 	"net/http"
-	//"strconv"
 	"time"
+	"strings"
 )
 
 type ShandongChannelProgramListResult struct {
@@ -134,12 +133,25 @@ func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 			return nil, errors.New("StartTime or EndTime is empty")
 		}
 
+		// 根据需要处理时间字符串，移除秒
+		startTimeStr := rawProg.StartTime
+		if strings.Contains(startTimeStr, ":") {
+			parts := strings.Split(startTimeStr, ":")
+			startTimeStr = parts[0] + ":" + parts[1] // 取时和分
+		}
+
+		endTimeStr := rawProg.EndTime
+		if strings.Contains(endTimeStr, ":") {
+			parts := strings.Split(endTimeStr, ":")
+			endTimeStr = parts[0] + ":" + parts[1] // 取时和分
+		}
+
 		// 修改时间解析格式为只包含时和分
-		startTime, err := time.Parse("15:04", rawProg.StartTime) // 只解析时和分
+		startTime, err := time.Parse("15:04", startTimeStr) // 只解析时和分
 		if err != nil {
 			return nil, fmt.Errorf("error parsing StartTime: %v", err)
 		}
-		endTime, err := time.Parse("15:04", rawProg.EndTime) // 只解析时和分
+		endTime, err := time.Parse("15:04", endTimeStr) // 只解析时和分
 		if err != nil {
 			return nil, fmt.Errorf("error parsing EndTime: %v", err)
 		}
