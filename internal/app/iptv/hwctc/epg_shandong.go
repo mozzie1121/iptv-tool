@@ -13,12 +13,12 @@ import (
 	"time"
 )
 
-type shandongChannelProgramListResult struct {
-	Data  []shandongChannelProgramList `json:"data"`
+type ShandongChannelProgramListResult struct {
+	Data  []ShandongChannelProgramList `json:"data"`
 	Title []string                `json:"title"`
 }
 
-type shandongChannelProgramList struct {
+type ShandongChannelProgramList struct {
 	ProgName     string `json:"progName"`
 	ScrollFlag   int    `json:"scrollFlag"`
 	StartTime    string `json:"startTime"`
@@ -28,8 +28,8 @@ type shandongChannelProgramList struct {
 	ProgID       string `json:"progId"`
 }
 
-// getshandongChannelProgramList 获取指定频道的节目单列表（hb）
-func (c *Client) getshandongChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
+// getShandongChannelProgramList 获取指定频道的节目单列表（hb）
+func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
 	// 获取未来一天的日期
 	tomorrow := time.Now().AddDate(0, 0, 1)
 	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, tomorrow.Location())
@@ -50,7 +50,7 @@ func (c *Client) getshandongChannelProgramList(ctx context.Context, token *Token
 		endTime := startDate.Format("20060102") + " 23:59"   // 结束时间设置为当天23:59
 
 		// 获取指定日期的节目单列表
-		programList, err := c.getshandongChannelDateProgram(ctx, token, channel.ChannelID, startTime, endTime, 0) // index starts from 0
+		programList, err := c.getShandongChannelDateProgram(ctx, token, channel.ChannelID, startTime, endTime, 0) // index starts from 0
 		if err != nil {
 			if errors.Is(err, ErrEPGApiNotFound) {
 				return nil, err
@@ -72,8 +72,8 @@ func (c *Client) getshandongChannelProgramList(ctx context.Context, token *Token
 	}, nil
 }
 
-// getshandongChannelDateProgram 获取指定频道的某日期的节目单列表
-func (c *Client) getshandongChannelDateProgram(ctx context.Context, token *Token, channelId string, startTime string, endTime string, index int) ([]iptv.Program, error) {
+// getShandongChannelDateProgram 获取指定频道的某日期的节目单列表
+func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token, channelId string, startTime string, endTime string, index int) ([]iptv.Program, error) {
 	// 创建请求
 	url := fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp?CHANNELID=%s&index=%d", c.host, channelId, index)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -111,13 +111,13 @@ func (c *Client) getshandongChannelDateProgram(ctx context.Context, token *Token
 		return nil, err
 	}
 
-	return parseshandongChannelDateProgram(result)
+	return parseShandongChannelDateProgram(result)
 }
 
-// parseshandongChannelDateProgram 解析频道节目单列表
-func parseshandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
+// parseShandongChannelDateProgram 解析频道节目单列表
+func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
 	// 解析json
-	var resp shandongChannelProgramListResult
+	var resp ShandongChannelProgramListResult
 	if err := json.Unmarshal(rawData, &resp); err != nil {
 		return nil, err
 	}
