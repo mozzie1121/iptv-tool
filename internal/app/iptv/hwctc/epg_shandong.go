@@ -8,7 +8,6 @@ import (
 	"io"
 	"iptv/internal/app/iptv"
 	"net/http"
-	"strings"
 	"time"
 )
 
