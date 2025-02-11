@@ -134,7 +134,7 @@ func parseShandongChannelDateProgram(rawData []byte, index int) ([]iptv.Program,
 	}
 
 	// 计算日期
-	date := time.Now().AddDate(0, 0, -index) // 根据 index 计算日期
+	date := time.Now().AddDate(0, 0, index) // 根据 index 计算日期
 
 	// 遍历单个日期中的节目单
 	programList := make([]iptv.Program, 0, len(resp.Data))
