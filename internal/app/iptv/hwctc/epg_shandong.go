@@ -9,6 +9,7 @@ import (
 	"iptv/internal/app/iptv"
 	"net/http"
 	"time"
+	"strings"
 )
 
 type ShandongChannelProgramListResult struct {
