@@ -139,19 +139,26 @@ func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) 
 			return nil, errors.New("StartTime or EndTime is empty")
 		}
 
-		// 解析时间并添加日期
+		// 解析起始时间（只需要小时和分钟）
 		startTime, err := time.Parse("15:04", rawProg.StartTime)
 		if err != nil {
 			return nil, fmt.Errorf("error parsing StartTime: %v", err)
 		}
-		endTime, err := time.Parse("15:04", rawProg.EndTime)
-		if err != nil {
-			return nil, fmt.Errorf("error parsing EndTime: %v", err)
+
+		// 解析结束时间（包含秒）
+		var endTime time.Time
+		if strings.Contains(rawProg.EndTime, ":") {
+			endTime, err = time.Parse("15:04:05", rawProg.EndTime) // 解析带秒的结束时间
+			if err != nil {
+				return nil, fmt.Errorf("error parsing EndTime: %v", err)
+			}
+		} else {
+			return nil, errors.New("EndTime format is invalid, it should contain seconds")
 		}
 
 		// 将具体日期和时间合并
 		startTime = time.Date(date.Year(), date.Month(), date.Day(), startTime.Hour(), startTime.Minute(), 0, 0, startTime.Location())
-		endTime = time.Date(date.Year(), date.Month(), date.Day(), endTime.Hour(), endTime.Minute(), 0, 0, endTime.Location())
+		endTime = time.Date(date.Year(), date.Month(), date.Day(), endTime.Hour(), endTime.Minute(), endTime.Second(), 0, endTime.Location())
 
 		programList = append(programList, iptv.Program{
 			ProgramName:     rawProg.ProgName,
@@ -164,3 +171,4 @@ func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) 
 
 	return programList, nil
 }
+
