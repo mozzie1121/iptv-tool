@@ -32,9 +32,9 @@ func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token
 	// 获取今天的日期
 	today := time.Now().Truncate(24 * time.Hour)
 
-	// 根据当前频道的时移范围，预估EPG的查询时间范围
+	// 根据当前频道的时移范围，预估 EPG 的查询时间范围
 	epgBackDay := int(channel.TimeShiftLength.Hours() / 24)
-	// 限制EPG查询的最大时间范围
+	// 限制 EPG 查询的最大时间范围
 	if epgBackDay > maxBackDay {
 		epgBackDay = maxBackDay
 	}
@@ -92,7 +92,7 @@ func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Requested-With", "com.hisense.iptv")
 
-	// 设置Cookie
+	// 设置 Cookie
 	req.AddCookie(&http.Cookie{
 		Name:  "JSESSIONID",
 		Value: token.JSESSIONID,
@@ -117,13 +117,13 @@ func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token
 		return nil, err
 	}
 
-	// 在这里传递正确的日期
+	// 在这里调用解析函数，不再需要传递日期，现在可以通过 index 知道所需日期
 	return parseShandongChannelDateProgram(result, index)
 }
 
 // parseShandongChannelDateProgram 解析频道节目单列表
 func parseShandongChannelDateProgram(rawData []byte, index int) ([]iptv.Program, error) {
-	// 解析json
+	// 解析 json
 	var resp ShandongChannelProgramListResult
 	if err := json.Unmarshal(rawData, &resp); err != nil {
 		return nil, err
@@ -133,8 +133,8 @@ func parseShandongChannelDateProgram(rawData []byte, index int) ([]iptv.Program,
 		return nil, ErrChProgListIsEmpty
 	}
 
-	// 获取当前日期
-	date := time.Now().AddDate(0, 0, -index) // 根据index计算日期
+	// 计算日期
+	date := time.Now().AddDate(0, 0, -index) // 根据 index 计算日期
 
 	// 遍历单个日期中的节目单
 	programList := make([]iptv.Program, 0, len(resp.Data))
