@@ -171,3 +171,4 @@ func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) 
 	}
 
 	return programList, nil
+}
