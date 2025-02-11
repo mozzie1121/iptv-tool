@@ -117,7 +117,7 @@ func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token
 	}
 
 	// 解析节目单
-	return parseShandongChannelDateProgram(result, index, today)
+	return parseShandongChannelDateProgram(result, index, time.Now())
 }
 
 // parseShandongChannelDateProgram 解析频道节目单列表
@@ -171,4 +171,3 @@ func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) 
 	}
 
 	return programList, nil
-}
