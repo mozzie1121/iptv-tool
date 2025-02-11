@@ -27,29 +27,29 @@ type ShandongChannelProgramList struct {
 	ProgID       string `json:"progId"`
 }
 
-// getShandongChannelProgramList 获取指定频道的节目单列表（hb）
+// getShandongChannelProgramList 获取指定频道的节目单列表
 func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
-	// 获取未来一天的日期
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, tomorrow.Location())
+	// 获取今天的日期
+	today := time.Now().Truncate(24 * time.Hour)
 
-	// 根据当前频道的时移范围，预估EPG的查询时间范围（加上未来一天）
-	epgBackDay := int(channel.TimeShiftLength.Hours()/24) + 1
+	// 根据当前频道的时移范围，预估EPG的查询时间范围
+	epgBackDay := int(channel.TimeShiftLength.Hours()/24)
 	// 限制EPG查询的最大时间范围
 	if epgBackDay > maxBackDay {
 		epgBackDay = maxBackDay
 	}
 
-	// 从未来一天开始往前，倒查多个日期的节目单
-	dateProgramList := make([]iptv.DateProgram, 0, epgBackDay+1)
-	for i := 0; i <= epgBackDay; i++ {
-		// 获取起止时间
-		startDate := tomorrow.AddDate(0, 0, -i)
-		startTime := startDate.Format("20060102") + " 00:00" // 只获取节目的开始时间
-		endTime := startDate.Format("20060102") + " 23:59"   // 结束时间设置为当天23:59
+	// 从今天开始往前，倒查多个日期的节目单
+	dateProgramList := make([]iptv.DateProgram, 0, epgBackDay)
+	for i := 0; i < epgBackDay; i++ {
+		// 获取过去日期
+		pastDate := today.AddDate(0, 0, -i) // 获取今天及之前的日期
+		// 计算开始与结束时间
+		startTime := pastDate.Format("20060102") + " 00:00"
+		endTime := pastDate.Format("20060102") + " 23:59"
 
 		// 计算 index
-		index := 0 - i
+		index := -i
 		if index < -6 {
 			index = -6
 		}
@@ -60,12 +60,12 @@ func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token
 			if errors.Is(err, ErrEPGApiNotFound) {
 				return nil, err
 			}
-			c.logger.Sugar().Warnf("Failed to get the program list for channel %s on %s. Error: %v", channel.ChannelName, startDate.Format("20060102"), err)
+			c.logger.Sugar().Warnf("Failed to get the program list for channel %s on %s. Error: %v", channel.ChannelName, pastDate.Format("20060102"), err)
 			continue
 		}
 
 		dateProgramList = append(dateProgramList, iptv.DateProgram{
-			Date:        startDate,
+			Date:        pastDate,
 			ProgramList: programList,
 		})
 	}
@@ -117,7 +117,7 @@ func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token
 	}
 
 	// 解析节目单
-	return parseShandongChannelDateProgram(result, index, time.Now().AddDate(0, 0, 1).AddDate(0, 0, -index))
+	return parseShandongChannelDateProgram(result, index, today)
 }
 
 // parseShandongChannelDateProgram 解析频道节目单列表
@@ -172,4 +172,3 @@ func parseShandongChannelDateProgram(rawData []byte, index int, date time.Time) 
 
 	return programList, nil
 }
-
