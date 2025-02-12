@@ -46,7 +46,6 @@ func (c *Client) GetAllChannelProgramList(ctx context.Context, channels []iptv.C
 			progList, err = c.getGdhdpublicChannelProgramList(ctx, token, &channel)
 		case chProgAPIVsp:
 			progList, err = c.getVspChannelProgramList(ctx, token, &channel)
-		default:
 		case chProgAPIShandong:
 			progList, err = c.getShandongChannelProgramList(ctx, token, &channel)
 		default:
