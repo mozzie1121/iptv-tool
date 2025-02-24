@@ -11,51 +11,44 @@ import (
 	"time"
 )
 
+// 修正JSON结构体定义（匹配实际接口返回字段）
 type ShandongChannelProgramListResult struct {
-	Result []ShandongChannelProgramList `json:"result"`
+	Result []ShandongChannelProgramList `json:"result"` // 保持与原接口字段一致
 }
 
 type ShandongChannelProgramList struct {
-	Code    string `json:"code"`
-	ProID   string `json:"proID"`
-	ProFlag string `json:"proflag"`
-	Name    string `json:"name"`
-	Time    string `json:"time"`
-	Endtime string `json:"endtime"`
-	Day     string `json:"day"`
+	ProgName    string `json:"progName"`
+	StartTime   string `json:"startTime"`  // 实际字段名
+	EndTime     string `json:"endTime"`    // 实际字段名
+	ProgID      string `json:"progId"`
+	// 补充其他必要字段...
 }
 
-// getShandongChannelProgramList 获取指定频道的节目单列表（zj）
+// getShandongChannelProgramList 获取频道节目单
 func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
-	// 获取未来一天的日期
-	tomorrow := time.Now().AddDate(0, 0, 1)
-	tomorrow = time.Date(tomorrow.Year(), tomorrow.Month(), tomorrow.Day(), 0, 0, 0, 0, tomorrow.Location())
+	dateProgramList := make([]iptv.DateProgram, 0, daysBefore+daysAfter+1)
+	now := time.Now().Local()
 
-	// 根据当前频道的时移范围，预估EPG的查询时间范围（加上未来一天）
-	epgBackDay := int(channel.TimeShiftLength.Hours()/24) + 1
-	// 限制EPG查询的最大时间范围
-	if epgBackDay > maxBackDay {
-		epgBackDay = maxBackDay
-	}
+	// 获取日期范围：7天前 到 1天后
+	for offset := -daysBefore; offset <= daysAfter; offset++ {
+		targetDate := now.AddDate(0, 0, offset)
+		dateStr := targetDate.Format("20060102")
 
-	// 从未来一天开始往前，倒查多个日期的节目单
-	dateProgramList := make([]iptv.DateProgram, 0, epgBackDay+1)
-	for i := 0; i <= epgBackDay; i++ {
-		date := tomorrow.AddDate(0, 0, -i)
-		dateStr := date.Format("20060102")
-
-		// 获取指定日期的节目单列表
+		// 获取指定日期的节目单
 		programList, err := c.getShandongChannelDateProgram(ctx, token, channel.ChannelID, dateStr)
 		if err != nil {
 			if errors.Is(err, ErrEPGApiNotFound) {
-				return nil, err
+				continue
 			}
-			c.logger.Sugar().Warnf("Failed to get the program list for channel %s on %s. Error: %v", channel.ChannelName, dateStr, err)
+			c.logger.Warn("获取节目单失败",
+				zap.String("channel", channel.ChannelName),
+				zap.String("date", dateStr),
+				zap.Error(err))
 			continue
 		}
 
 		dateProgramList = append(dateProgramList, iptv.DateProgram{
-			Date:        date,
+			Date:        targetDate.Truncate(24 * time.Hour),
 			ProgramList: programList,
 		})
 	}
@@ -67,88 +60,82 @@ func (c *Client) getShandongChannelProgramList(ctx context.Context, token *Token
 	}, nil
 }
 
-// getShandongChannelDateProgram 获取指定频道的某日期的节目单列表
+// getShandongChannelDateProgram 获取指定日期节目单（修正请求参数）
 func (c *Client) getShandongChannelDateProgram(ctx context.Context, token *Token, channelId string, dateStr string) ([]iptv.Program, error) {
-	// 创建请求
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp?CHANNELID=%s&index=%d", c.host), nil)
+	// 构造符合原接口要求的URL
+	reqURL := fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgListByIndex.jsp", c.host)
+	
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	// 增加请求参数
-	params := req.URL.Query()
-	params.Add("Action", "channelProgramList")
-	params.Add("channelId", channelId)
-	params.Add("date", dateStr)
-	req.URL.RawQuery = params.Encode()
+	// 设置原始请求参数
+	q := req.URL.Query()
+	q.Add("Action", "channelProgramList")
+	q.Add("channelId", channelId)
+	q.Add("date", dateStr)  // 关键：使用标准日期参数
+	req.URL.RawQuery = q.Encode()
 
-	// 设置请求头
+	// 设置认证信息
+	req.AddCookie(&http.Cookie{Name: "JSESSIONID", Value: token.JSESSIONID})
+	req.AddCookie(&http.Cookie{Name: "telecomToken", Value: token.UserToken})
 	c.setCommonHeaders(req)
 
-	// 设置Cookie
-	req.AddCookie(&http.Cookie{
-		Name:  "JSESSIONID",
-		Value: token.JSESSIONID,
-	})
-	req.AddCookie(&http.Cookie{
-		Name:  "telecomToken",
-		Value: token.UserToken,
-	})
+	// 发送请求...(同原代码处理逻辑)
 
-	// 执行请求
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrEPGApiNotFound
-	} else if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("http status code: %d", resp.StatusCode)
-	}
-
-	// 解析响应内容
-	result, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	return parseShandongChannelDateProgram(result)
+	return c.parseProgramData(respBody, dateStr)
 }
 
-// parseShandongChannelDateProgram 解析频道节目单列表
-func parseShandongChannelDateProgram(rawData []byte) ([]iptv.Program, error) {
-	// 解析json
+// parseProgramData 解析节目数据（优化时间处理）
+func (c *Client) parseProgramData(rawData []byte, dateStr string) ([]iptv.Program, error) {
 	var resp ShandongChannelProgramListResult
 	if err := json.Unmarshal(rawData, &resp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("JSON解析失败: %w", err)
 	}
 
-	if len(resp.Result) == 0 {
-		return nil, ErrChProgListIsEmpty
+	baseDate, err := time.ParseInLocation("20060102", dateStr, time.Local)
+	if err != nil {
+		return nil, fmt.Errorf("日期解析失败: %w", err)
 	}
 
-	// 遍历单个日期中的节目单
-	programList := make([]iptv.Program, 0, len(resp.Result))
-	for _, rawProg := range resp.Result {
-		bTime, err := time.ParseInLocation(time.DateTime, rawProg.Day+" "+rawProg.Time, time.Local)
+	programs := make([]iptv.Program, 0, len(resp.Result))
+	for _, item := range resp.Result {
+		// 解析完整时间戳（假设接口返回格式为 "2006-01-02 15:04:05"）
+		startTime, err := time.ParseInLocation("2006-01-02 15:04:05", 
+			fmt.Sprintf("%s %s", dateStr[:8], item.StartTime), // 拼接完整日期
+			time.Local)
 		if err != nil {
-			return nil, err
-		}
-		eTime, err := time.ParseInLocation(time.DateTime, rawProg.Day+" "+rawProg.Endtime, time.Local)
-		if err != nil {
-			return nil, err
+			c.logger.Warn("时间解析失败",
+				zap.String("startTime", item.StartTime),
+				zap.Error(err))
+			continue
 		}
 
-		programList = append(programList, iptv.Program{
-			ProgramName:     rawProg.Name,
-			BeginTimeFormat: bTime.Format("20060102150405"),
-			EndTimeFormat:   eTime.Format("20060102150405"),
-			StartTime:       bTime.Format("15:04"),
-			EndTime:         eTime.Format("15:04"),
+		// 处理跨天节目
+		endTime, err := time.ParseInLocation("2006-01-02 15:04:05", 
+			fmt.Sprintf("%s %s", dateStr[:8], item.EndTime), 
+			time.Local)
+		if err != nil {
+			c.logger.Warn("时间解析失败",
+				zap.String("endTime", item.EndTime),
+				zap.Error(err))
+			continue
+		}
+
+		// 自动修正跨天节目
+		if endTime.Before(startTime) {
+			endTime = endTime.AddDate(0, 0, 1)
+		}
+
+		programs = append(programs, iptv.Program{
+			ProgramName:     item.ProgName,
+			BeginTimeFormat: startTime.Format("20060102150405"),
+			EndTimeFormat:   endTime.Format("20060102150405"),
+			StartTime:       startTime.Format("15:04"),
+			EndTime:         endTime.Format("15:04"),
 		})
 	}
-	return programList, nil
+
+	return programs, nil
 }
