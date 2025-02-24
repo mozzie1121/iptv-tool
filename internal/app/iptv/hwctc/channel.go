@@ -127,11 +127,12 @@ func (c *Client) GetAllChannelList(ctx context.Context) ([]iptv.Channel, error) 
 		timeShiftURL, err := url.Parse(string(matches[7]))
 		if err != nil {
 			c.logger.Warn("The timeShiftURL of this channel is illegal. Use the default value: nil.", zap.String("channelName", channelName), zap.String("timeShiftURL", string(matches[7])))
+		
 		}
-		if timeShiftURL != nil {
+		//if timeShiftURL != nil {
 			// 重置时移地址的查询参数
-			timeShiftURL.RawQuery = ""
-		}
+		//	timeShiftURL.RawQuery = ""
+		//}
 
 		// 自动识别频道的分类
 		groupName := iptv.GetChannelGroupName(c.chGroupRulesList, channelName)
