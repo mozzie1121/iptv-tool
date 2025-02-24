@@ -47,14 +47,14 @@ func (c *Client) GetAllChannelList(ctx context.Context) ([]iptv.Channel, error) 
 
 	// 创建请求
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("http://%s/EPG/jsp/getchannellistHWCTC.jsp", c.host), strings.NewReader(body.Encode()))
+		fmt.Sprintf("http://%s/EPG/jsp/getchannellistHWCU.jsp", c.host), strings.NewReader(body.Encode()))
 	if err != nil {
 		return nil, err
 	}
 
 	// 设置请求头
 	c.setCommonHeaders(req)
-	req.Header.Set("Referer", fmt.Sprintf("http://%s/EPG/jsp/ValidAuthenticationHWCTC.jsp", c.host))
+	req.Header.Set("Referer", fmt.Sprintf("http://%s/EPG/jsp/ValidAuthenticationHWCU.jsp", c.host))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// 设置Cookie

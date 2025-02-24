@@ -70,7 +70,7 @@ func NewKeyCLI() *cobra.Command {
 				}
 
 				// 写入文件
-				var infoText = fmt.Sprintf("  Random: %s\n  EncryptToken: %s\n  UserID: %s\n  STBID: %s\n  IP: %s\n  MAC: %s\n  Reserved: %s\n  CTC: %s",
+				var infoText = fmt.Sprintf("  Random: %s\n  EncryptToken: %s\n  UserID: %s\n  STBID: %s\n  IP: %s\n  MAC: %s\n  Reserved: %s\n  CU: %s",
 					infos[0], infos[1], infos[2], infos[3], infos[4], infos[5], infos[6], infos[7])
 				line := fmt.Sprintf("Find key: %s, Plaintext: %s\nDetails:\n%s\n\n", key, decodedText, infoText)
 				logger.Info("Find a key.", zap.String("key", key))
