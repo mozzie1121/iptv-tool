@@ -24,13 +24,14 @@ var (
 	udpxyURL          string
 	format            string
 	catchupSource     string
+	catchUpMode       string // 新增参数
 	multicastFirst    bool
 )
 
 func NewChannelCLI() *cobra.Command {
 	channelCmd := &cobra.Command{
 		Use:   "channel",
-		Short: "获取频道列表，并按指定格式生成直播源文件。",
+		Short: "获取频道列表，并按指定格式生成直播源文件（支持多种回看模式）",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// L()：获取全局logger
 			logger := zap.L()
@@ -86,8 +87,15 @@ func NewChannelCLI() *cobra.Command {
 					return err
 				}
 			case "m3u":
-				// 将获取到的频道列表转换为M3U格式
-				content, err = iptv.ToM3UFormat(channels, udpxyURL, catchupSource, multicastFirst, "")
+				// 修复点：添加缺失的 catchUpMode 参数
+				content, err = iptv.ToM3UFormat(
+					channels,
+					udpxyURL,
+					catchupSource,
+					catchUpMode,  // 新增参数
+					multicastFirst,
+					"", // logoBaseUrl 留空
+				)
 				if err != nil {
 					return err
 				}
@@ -105,9 +113,17 @@ func NewChannelCLI() *cobra.Command {
 		},
 	}
 
+	// 命令行参数配置
 	channelCmd.Flags().StringVarP(&udpxyURL, "udpxy", "u", "", "如果有安装udpxy进行组播转单播，请配置HTTP地址，e.g `http://192.168.1.1:4022`。")
 	channelCmd.Flags().StringVarP(&format, "format", "f", "m3u", "生成的直播源文件格式，e.g `m3u或txt`。")
-	channelCmd.Flags().StringVarP(&catchupSource, "catchup-source", "s", "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", "回看的请求格式字符串，会追加在时移地址后面。")
+	channelCmd.Flags().StringVarP(&catchupSource, "catchup-source", "s", "?playseek=${(b)yyyyMMddHHmmss}-${(e)yyyyMMddHHmmss}", "回看的请求格式字符串（模式0/1/4时生效）")
+	channelCmd.Flags().StringVarP(&catchUpMode, "catch-up-mode", "c", "0",
+		`回看模式参数：
+0 - 默认模式（使用 catchup-source 参数）
+1 - 追加模式
+2 - Flussonic 专用格式
+3 - Xtream-Codes 兼容格式
+4 - 自定义参数模式`)
 	channelCmd.Flags().BoolVarP(&multicastFirst, "multicast-first", "m", false, "当频道存在多个URL地址时，是否优先使用组播地址。")
 
 	return channelCmd
