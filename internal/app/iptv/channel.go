@@ -11,9 +11,10 @@ import (
 	"time"
 )
 
-const SCHEME_IGMP = "igmp"
+const (
+	SCHEME_IGMP = "igmp"
+)
 
-// Channel 频道信息
 type Channel struct {
 	ChannelID       string        `json:"channelID"`       
 	ChannelName     string        `json:"channelName"`     
@@ -22,18 +23,16 @@ type Channel struct {
 	TimeShift       string        `json:"timeShift"`       
 	TimeShiftLength time.Duration `json:"timeShiftLength"` 
 	TimeShiftURL    *url.URL      `json:"timeShiftURL"`    
-
-	GroupName string `json:"groupName"` 
-	LogoName  string `json:"logoName"`  
+	GroupName       string         `json:"groupName"`      
+	LogoName        string         `json:"logoName"`       
 }
 
-// ToM3UFormat 
-func ToM3UFormat(
-	channels []Channel, 
-	udpxyURL, 
-	catchupSource string, 
-	catchUpMode string,  // 新增参数
-	multicastFirst bool, 
+// ToM3UFormat 转换为M3U格式内容
+	channels []Channel,
+	udpxyURL,
+	catchupSource,
+	catchUpMode string,
+	multicastFirst bool,
 	logoBaseUrl string,
 ) (string, error) {
 	if len(channels) == 0 {
@@ -47,6 +46,7 @@ func ToM3UFormat(
 
 	var sb strings.Builder
 	sb.WriteString("#EXTM3U\n")
+
 	for _, channel := range channels {
 		channelURLStr, err := getChannelURLStr(channel.ChannelURLs, udpxyURL, multicastFirst)
 		if err != nil {
@@ -57,10 +57,11 @@ func ToM3UFormat(
 		m3uLineSb.WriteString(fmt.Sprintf("#EXTINF:-1 tvg-id=\"%s\" tvg-chno=\"%s\"",
 			channel.ChannelID, channel.UserChannelID))
 
-		// 台标处理
+		// 台标处理逻辑
 		if logoBaseUrl != "" && channel.LogoName != "" {
 			logoFile := channel.LogoName + ".png"
-			if _, err = os.Stat(filepath.Join(currDir, logoDirName, logoFile)); !os.IsNotExist(err) {
+			logoPath := filepath.Join(currDir, logoDirName, logoFile)
+			if _, err := os.Stat(logoPath); !os.IsNotExist(err) {
 				if logoUrl, err := url.JoinPath(logoBaseUrl, logoFile); err == nil {
 					m3uLineSb.WriteString(fmt.Sprintf(" tvg-logo=\"%s\"", logoUrl))
 				}
@@ -72,7 +73,7 @@ func ToM3UFormat(
 			baseURL := channel.TimeShiftURL.String()
 			var sourceURL string
 
-			// 新增模式切换逻辑
+			// 模式选择逻辑
 			switch catchUpMode {
 			case "1": // append模式
 				sourceURL = baseURL + catchupSource
@@ -82,38 +83,44 @@ func ToM3UFormat(
 				sourceURL = fmt.Sprintf("%s?timeshift=${start}-${end}", baseURL)
 			case "4": // custom模式
 				sourceURL = fmt.Sprintf("%s?%s", baseURL, catchupSource)
-			default:  // 0或其他值使用默认模式
+			default:  // 0或其他值使用基础URL
 				sourceURL = baseURL
 			}
 
+			// 动态生成catchup属性
 			m3uLineSb.WriteString(fmt.Sprintf(
 				" catchup=\"%s\" catchup-source=\"%s\" catchup-days=\"%d\"",
-				mapCatchupMode(catchUpMode), // 映射模式名称
+				mapCatchupMode(catchUpMode),
 				sourceURL,
 				int64(channel.TimeShiftLength.Hours()/24),
 			))
 		}
 
-		// 分组信息
+		// 频道信息结尾
 		m3uLineSb.WriteString(fmt.Sprintf(" group-title=\"%s\",%s\n%s\n",
 			channel.GroupName, channel.ChannelName, channelURLStr))
 		sb.WriteString(m3uLineSb.String())
 	}
+
 	return sb.String(), nil
 }
 
-// 新增的私有映射函数
+// 模式映射函数（新增）
 func mapCatchupMode(param string) string {
 	switch param {
-	case "1": return "append"
-	case "2": return "flussonic"
-	case "3": return "xdomo"
-	case "4": return "custom"
-	default: return "default"
+	case "1":
+		return "append"
+	case "2":
+		return "flussonic"
+	case "3":
+		return "xdomo"
+	case "4":
+		return "custom"
+	default: // 包含0和非法值
+		return "default"
 	}
 }
 
-// ToTxtFormat
 func ToTxtFormat(channels []Channel, udpxyURL string, multicastFirst bool) (string, error) {
 	if len(channels) == 0 {
 		return "", errors.New("no channels found")
@@ -128,50 +135,44 @@ func ToTxtFormat(channels []Channel, udpxyURL string, multicastFirst bool) (stri
 			groupChannelMap[channel.GroupName] = []Channel{channel}
 			continue
 		}
-
 		groupChannels = append(groupChannels, channel)
 		groupChannelMap[channel.GroupName] = groupChannels
 	}
 
 	var sb strings.Builder
 	for _, groupName := range groupNames {
-		groupChannels := groupChannelMap[groupName]
-		groupLine := fmt.Sprintf("%s,#genre#\n", groupName)
-		sb.WriteString(groupLine)
-
-		for _, channel := range groupChannels {
+		sb.WriteString(fmt.Sprintf("%s,#genre#\n", groupName))
+		for _, channel := range groupChannelMap[groupName] {
 			channelURLStr, err := getChannelURLStr(channel.ChannelURLs, udpxyURL, multicastFirst)
 			if err != nil {
 				return "", err
 			}
-			txtLine := fmt.Sprintf("%s,%s\n", channel.ChannelName, channelURLStr)
-			sb.WriteString(txtLine)
+			sb.WriteString(fmt.Sprintf("%s,%s\n", channel.ChannelName, channelURLStr))
 		}
 	}
 	return sb.String(), nil
 }
 
-// getChannelURLStr 
 func getChannelURLStr(channelURLs []url.URL, udpxyURL string, multicastFirst bool) (string, error) {
 	if len(channelURLs) == 0 {
 		return "", errors.New("no channel urls found")
 	}
 
-	var channelURL url.URL
+	var selectedURL url.URL
 	if len(channelURLs) == 1 {
-		channelURL = channelURLs[0]
+		selectedURL = channelURLs[0]
 	} else {
-		for _, channelURL = range channelURLs {
-			if (multicastFirst && channelURL.Scheme == SCHEME_IGMP) ||
-				(!multicastFirst && channelURL.Scheme != SCHEME_IGMP) {
+		for _, u := range channelURLs {
+			if (multicastFirst && u.Scheme == SCHEME_IGMP) ||
+				(!multicastFirst && u.Scheme != SCHEME_IGMP) {
+				selectedURL = u
 				break
 			}
 		}
 	}
 
-	if udpxyURL != "" && channelURL.Scheme == SCHEME_IGMP {
-		return url.JoinPath(udpxyURL, fmt.Sprintf("/rtp/%s", channelURL.Host))
-	} else {
-		return channelURL.String(), nil
+	if udpxyURL != "" && selectedURL.Scheme == SCHEME_IGMP {
+		return url.JoinPath(udpxyURL, "/rtp/", selectedURL.Host)
 	}
+	return selectedURL.String(), nil
 }
