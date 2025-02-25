@@ -28,6 +28,7 @@ type Channel struct {
 }
 
 // ToM3UFormat 转换为M3U格式内容
+func ToM3UFormat(
 	channels []Channel,
 	udpxyURL,
 	catchupSource,
@@ -120,6 +121,7 @@ func mapCatchupMode(param string) string {
 		return "default"
 	}
 }
+
 
 func ToTxtFormat(channels []Channel, udpxyURL string, multicastFirst bool) (string, error) {
 	if len(channels) == 0 {
