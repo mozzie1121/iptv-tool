@@ -93,5 +93,12 @@ func (c *Client) getChannelProgramListByAuto(ctx context.Context, token *Token, 
 		return progList, err
 	}
 
+	progList, err = c.getSdIptvChannelProgramList(ctx, token, channel)
+	if !errors.Is(err, ErrEPGApiNotFound) {
+		c.logger.Info("An available EPG API was found.", zap.String("channelProgramAPI", chProgAPIShandong))
+		c.config.ChannelProgramAPI = chProgAPIShandong
+		return progList, err
+	}
+
 	return nil, err
 }
