@@ -9,61 +9,40 @@ import (
 	"iptv/internal/app/iptv"
 	"net/http"
 	"net/url"
-	"strconv"
 	"time"
 )
 
 const (
-	playbackDays = 7 // 回看天数（过去7天）
-	previewDays  = 5 // 预告天数（未来5天）
-	dateFormat   = "20060102"
-	timeFormat   = "150405"
+	dateFormat       = "20060102"
+	shandongTimeFmt = "15:04"
 )
 
-var (
-	ErrEPGApiNotFound  = errors.New("EPG API 404 not found")
-	ErrChProgListIsEmpty = errors.New("channel program list is empty")
-)
-
-type sdProgramResponse struct {
+type shandongProgramResponse struct {
 	Data []struct {
 		ProgName    string `json:"progName"`
 		StartTime   string `json:"startTime"`
 		EndTime     string `json:"endTime"`
 		SubProgName string `json:"subProgName"`
-		ProgId      string `json:"progId"`
+		ProgID      string `json:"progId"`
 	} `json:"data"`
 }
 
-type Client struct {
-	httpClient *http.Client
-	host       string
-	logger     iptv.Logger
-}
-
-func NewClient(host string, logger iptv.Logger) *Client {
-	return &Client{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		host:       host,
-		logger:     logger,
-	}
-}
-
-// GetChannelProgramList 获取频道节目单（主入口）
-func (c *Client) GetChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
-	datePrograms := make([]iptv.DateProgram, 0, playbackDays+previewDays+1)
+// getSdIptvChannelProgramList 山东专用节目单获取方法
+func (c *Client) getSdIptvChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
+	datePrograms := make([]iptv.DateProgram, 0)
 	now := time.Now()
 
-	for offset := -playbackDays; offset <= previewDays; offset++ {
+	// 根据epg.go中定义的maxBackDay常量计算日期范围
+	for offset := -maxBackDay + 1; offset <= 0; offset++ { // 生成7天回看
 		targetDate := now.AddDate(0, 0, offset)
 		dateStr := targetDate.Format(dateFormat)
 
-		programs, err := c.getDateProgram(ctx, token, channel, dateStr)
+		programs, err := c.getShandongDateProgram(ctx, token, channel, dateStr)
 		if err != nil {
 			if errors.Is(err, ErrEPGApiNotFound) {
 				continue
 			}
-			c.logger.Warn(fmt.Sprintf("[%s] 获取节目单失败 日期:%s 错误:%v",
+			c.logger.Warn(fmt.Sprintf("[山东EPG][%s] 获取失败 日期:%s 错误:%v",
 				channel.ChannelName, dateStr, err))
 			continue
 		}
@@ -81,21 +60,25 @@ func (c *Client) GetChannelProgramList(ctx context.Context, token *Token, channe
 	}, nil
 }
 
-// getDateProgram 获取指定日期的节目单
-func (c *Client) getDateProgram(ctx context.Context, token *Token, channel *iptv.Channel, dateStr string) ([]iptv.Program, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+// getShandongDateProgram 获取指定日期的节目单
+func (c *Client) getShandongDateProgram(ctx context.Context, token *Token, channel *iptv.Channel, dateStr string) ([]iptv.Program, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", 
 		fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgList.jsp", c.host), nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	query := req.URL.Query()
-	query.Add("CHANNELID", channel.ChannelID)
-	query.Add("date", dateStr)
-	req.URL.RawQuery = query.Encode()
+	// 设置山东接口特有参数
+	q := req.URL.Query()
+	q.Add("CHANNELID", channel.ChannelID)
+	q.Add("date", dateStr)
+	req.URL.RawQuery = q.Encode()
 
-	c.setRequestHeaders(req)
-	c.setAuthCookies(req, token, channel)
+	// 设置山东特有请求头
+	c.setShandongHeaders(req)
+	
+	// 设置认证Cookies
+	c.setShandongCookies(req, token, channel)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -107,7 +90,7 @@ func (c *Client) getDateProgram(ctx context.Context, token *Token, channel *iptv
 		return nil, ErrEPGApiNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("非预期状态码: %d", resp.StatusCode)
+		return nil, fmt.Errorf("异常状态码: %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -115,14 +98,14 @@ func (c *Client) getDateProgram(ctx context.Context, token *Token, channel *iptv
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	return c.parseProgramResponse(body, dateStr)
+	return c.parseShandongPrograms(body, dateStr)
 }
 
-// parseProgramResponse 解析节目单响应
-func (c *Client) parseProgramResponse(data []byte, dateStr string) ([]iptv.Program, error) {
-	var resp sdProgramResponse
+// parseShandongPrograms 解析山东节目单响应
+func (c *Client) parseShandongPrograms(data []byte, dateStr string) ([]iptv.Program, error) {
+	var resp shandongProgramResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("JSON解析失败: %w", err)
+		return nil, fmt.Errorf("解析JSON失败: %w", err)
 	}
 
 	if len(resp.Data) == 0 {
@@ -136,15 +119,15 @@ func (c *Client) parseProgramResponse(data []byte, dateStr string) ([]iptv.Progr
 
 	programs := make([]iptv.Program, 0, len(resp.Data))
 	for _, item := range resp.Data {
-		start, err := parseProgramTime(baseDate, item.StartTime)
+		start, err := parseShandongTime(baseDate, item.StartTime)
 		if err != nil {
-			c.logger.Warn(fmt.Sprintf("时间解析跳过: %s %s", item.StartTime, err))
+			c.logger.Warn(fmt.Sprintf("时间解析跳过[开始时间]: %s 错误: %v", item.StartTime, err))
 			continue
 		}
 
-		end, err := parseProgramTime(baseDate, item.EndTime)
+		end, err := parseShandongTime(baseDate, item.EndTime)
 		if err != nil {
-			c.logger.Warn(fmt.Sprintf("时间解析跳过: %s %s", item.EndTime, err))
+			c.logger.Warn(fmt.Sprintf("时间解析跳过[结束时间]: %s 错误: %v", item.EndTime, err))
 			continue
 		}
 
@@ -155,8 +138,8 @@ func (c *Client) parseProgramResponse(data []byte, dateStr string) ([]iptv.Progr
 
 		programs = append(programs, iptv.Program{
 			ProgramName:     item.ProgName,
-			BeginTimeFormat: start.Format(timeFormat),
-			EndTimeFormat:   end.Format(timeFormat),
+			BeginTimeFormat: start.Format("20060102150405"),
+			EndTimeFormat:   end.Format("20060102150405"),
 			StartTime:       start.Format("15:04"),
 			EndTime:         end.Format("15:04"),
 		})
@@ -165,13 +148,14 @@ func (c *Client) parseProgramResponse(data []byte, dateStr string) ([]iptv.Progr
 	return programs, nil
 }
 
-// parseProgramTime 解析节目时间
-func parseProgramTime(base time.Time, t string) (time.Time, error) {
+// parseShandongTime 解析山东时间格式
+func parseShandongTime(base time.Time, t string) (time.Time, error) {
+	// 清理带秒的时间格式（如"00:12:00" -> "00:12"）
 	if len(t) > 5 {
 		t = t[:5]
 	}
 	
-	parsed, err := time.ParseInLocation("15:04", t, base.Location())
+	parsed, err := time.ParseInLocation(shandongTimeFmt, t, base.Location())
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -186,8 +170,8 @@ func parseProgramTime(base time.Time, t string) (time.Time, error) {
 	), nil
 }
 
-// setRequestHeaders 设置公共请求头
-func (c *Client) setRequestHeaders(req *http.Request) {
+// setShandongHeaders 设置山东特有请求头
+func (c *Client) setShandongHeaders(req *http.Request) {
 	headers := map[string]string{
 		"User-Agent":       "Mozilla/5.0 (SMART-TV; Linux; Tizen 5.5) AppleWebKit/537.36",
 		"Accept":           "application/json",
@@ -199,8 +183,8 @@ func (c *Client) setRequestHeaders(req *http.Request) {
 	}
 }
 
-// setAuthCookies 设置认证Cookies
-func (c *Client) setAuthCookies(req *http.Request, token *Token, channel *iptv.Channel) {
+// setShandongCookies 设置山东认证Cookies
+func (c *Client) setShandongCookies(req *http.Request, token *Token, channel *iptv.Channel) {
 	cookies := []*http.Cookie{
 		{Name: "JSESSIONID", Value: token.JSESSIONID},
 		{Name: "STARV_TIMESHFTCID", Value: channel.ChannelID},
