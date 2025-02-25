@@ -9,12 +9,13 @@ import (
 	"iptv/internal/app/iptv"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 )
 
 const (
-	dateFormat       = "20060102"
-	shandongTimeFmt = "15:04"
+	minIndex = -7  // 最早7天前
+	maxIndex = 4   // 最晚4天后
 )
 
 type shandongProgramResponse struct {
@@ -27,23 +28,23 @@ type shandongProgramResponse struct {
 	} `json:"data"`
 }
 
-// getSdIptvChannelProgramList 山东专用节目单获取方法
+// getSdIptvChannelProgramList 获取山东频道节目单
 func (c *Client) getSdIptvChannelProgramList(ctx context.Context, token *Token, channel *iptv.Channel) (*iptv.ChannelProgramList, error) {
 	datePrograms := make([]iptv.DateProgram, 0)
-	now := time.Now()
 
-	// 根据epg.go中定义的maxBackDay常量计算日期范围
-	for offset := -maxBackDay + 1; offset <= 0; offset++ { // 生成7天回看
-		targetDate := now.AddDate(0, 0, offset)
-		dateStr := targetDate.Format(dateFormat)
+	// 遍历index范围 [-7, 4]
+	for index := minIndex; index <= maxIndex; index++ {
+		// 计算实际日期
+		targetDate := time.Now().AddDate(0, 0, index)
+		dateStr := targetDate.Format("20060102")
 
-		programs, err := c.getShandongDateProgram(ctx, token, channel, dateStr)
+		programs, err := c.getShandongIndexProgram(ctx, token, channel, index)
 		if err != nil {
 			if errors.Is(err, ErrEPGApiNotFound) {
 				continue
 			}
-			c.logger.Warn(fmt.Sprintf("[山东EPG][%s] 获取失败 日期:%s 错误:%v",
-				channel.ChannelName, dateStr, err))
+			c.logger.Warn(fmt.Sprintf("[山东EPG][%s] 获取失败 index:%d 日期:%s 错误:%v",
+				channel.ChannelName, index, dateStr, err))
 			continue
 		}
 
@@ -60,32 +61,32 @@ func (c *Client) getSdIptvChannelProgramList(ctx context.Context, token *Token, 
 	}, nil
 }
 
-// getShandongDateProgram 获取指定日期的节目单
-func (c *Client) getShandongDateProgram(ctx context.Context, token *Token, channel *iptv.Channel, dateStr string) ([]iptv.Program, error) {
+// getShandongIndexProgram 通过index获取节目单
+func (c *Client) getShandongIndexProgram(ctx context.Context, token *Token, channel *iptv.Channel, index int) ([]iptv.Program, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", 
 		fmt.Sprintf("http://%s/EPG/jsp/defaulttrans2/en/datajsp/getTvodProgList.jsp", c.host), nil)
 	if err != nil {
 		return nil, fmt.Errorf("创建请求失败: %w", err)
 	}
 
-	// 设置山东接口特有参数
+	// 设置查询参数
 	q := req.URL.Query()
 	q.Add("CHANNELID", channel.ChannelID)
-	q.Add("date", dateStr)
+	q.Add("index", strconv.Itoa(index)) // 关键修改：使用index参数
 	req.URL.RawQuery = q.Encode()
 
-	// 设置山东特有请求头
+	// 设置请求头和Cookies（保持不变）
 	c.setShandongHeaders(req)
-	
-	// 设置认证Cookies
 	c.setShandongCookies(req, token, channel)
 
+	// 发送请求
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// 处理响应状态码
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, ErrEPGApiNotFound
 	}
@@ -93,16 +94,17 @@ func (c *Client) getShandongDateProgram(ctx context.Context, token *Token, chann
 		return nil, fmt.Errorf("异常状态码: %d", resp.StatusCode)
 	}
 
+	// 解析响应体
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
 
-	return c.parseShandongPrograms(body, dateStr)
+	return c.parseShandongPrograms(body, index)
 }
 
-// parseShandongPrograms 解析山东节目单响应
-func (c *Client) parseShandongPrograms(data []byte, dateStr string) ([]iptv.Program, error) {
+// parseShandongPrograms 解析节目单（新增index参数处理跨天）
+func (c *Client) parseShandongPrograms(data []byte, index int) ([]iptv.Program, error) {
 	var resp shandongProgramResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("解析JSON失败: %w", err)
@@ -112,28 +114,17 @@ func (c *Client) parseShandongPrograms(data []byte, dateStr string) ([]iptv.Prog
 		return nil, ErrChProgListIsEmpty
 	}
 
-	baseDate, err := time.ParseInLocation(dateFormat, dateStr, time.Local)
-	if err != nil {
-		return nil, fmt.Errorf("日期解析失败: %s", dateStr)
-	}
-
+	// 根据index计算基准日期
+	baseDate := time.Now().AddDate(0, 0, index)
+	
 	programs := make([]iptv.Program, 0, len(resp.Data))
 	for _, item := range resp.Data {
-		start, err := parseShandongTime(baseDate, item.StartTime)
+		// 解析时间（自动处理跨天）
+		start, end, err := parseShandongTimes(baseDate, item.StartTime, item.EndTime)
 		if err != nil {
-			c.logger.Warn(fmt.Sprintf("时间解析跳过[开始时间]: %s 错误: %v", item.StartTime, err))
+			c.logger.Warn(fmt.Sprintf("时间解析跳过: 开始[%s] 结束[%s] 错误:%v",
+				item.StartTime, item.EndTime, err))
 			continue
-		}
-
-		end, err := parseShandongTime(baseDate, item.EndTime)
-		if err != nil {
-			c.logger.Warn(fmt.Sprintf("时间解析跳过[结束时间]: %s 错误: %v", item.EndTime, err))
-			continue
-		}
-
-		// 处理跨天节目
-		if end.Before(start) {
-			end = end.AddDate(0, 0, 1)
 		}
 
 		programs = append(programs, iptv.Program{
@@ -148,26 +139,42 @@ func (c *Client) parseShandongPrograms(data []byte, dateStr string) ([]iptv.Prog
 	return programs, nil
 }
 
-// parseShandongTime 解析山东时间格式
-func parseShandongTime(base time.Time, t string) (time.Time, error) {
-	// 清理带秒的时间格式（如"00:12:00" -> "00:12"）
-	if len(t) > 5 {
-		t = t[:5]
+// parseShandongTimes 智能处理跨天时间
+func parseShandongTimes(baseDate time.Time, startStr, endStr string) (time.Time, time.Time, error) {
+	// 清理时间格式（处理类似"00:12:00"的情况）
+	if len(startStr) > 5 {
+		startStr = startStr[:5]
 	}
-	
-	parsed, err := time.ParseInLocation(shandongTimeFmt, t, base.Location())
+	if len(endStr) > 5 {
+		endStr = endStr[:5]
+	}
+
+	// 解析基础时间
+	startTime, err := time.ParseInLocation("15:04", startStr, baseDate.Location())
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
 	}
-	
-	return time.Date(
-		base.Year(),
-		base.Month(),
-		base.Day(),
-		parsed.Hour(),
-		parsed.Minute(),
-		0, 0, base.Location(),
-	), nil
+	endTime, err := time.ParseInLocation("15:04", endStr, baseDate.Location())
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+
+	// 创建完整时间对象
+	start := time.Date(
+		baseDate.Year(), baseDate.Month(), baseDate.Day(),
+		startTime.Hour(), startTime.Minute(), 0, 0, baseDate.Location(),
+	)
+	end := time.Date(
+		baseDate.Year(), baseDate.Month(), baseDate.Day(),
+		endTime.Hour(), endTime.Minute(), 0, 0, baseDate.Location(),
+	)
+
+	// 处理跨天节目（例如23:00-01:30）
+	if end.Before(start) {
+		end = end.AddDate(0, 0, 1)
+	}
+
+	return start, end, nil
 }
 
 // setShandongHeaders 设置山东特有请求头
