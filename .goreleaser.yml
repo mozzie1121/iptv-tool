@@ -9,12 +9,17 @@ builds:
   # MIPS 专用配置（ER-X-SFP 大端序）
   - binary: iptv
     main: ./cmd/iptv/main.go
+<<<<<<< HEAD
     id: mips
+=======
+    id: mipsle  # 唯一标识
+>>>>>>> parent of 01951db (Update .goreleaser.yml)
     env:
       - CGO_ENABLED=0
-      - GOMIPS=softfloat
+      - GOMIPS=hardfloat
+      - GOFLAGS="-gccgoflags=-march=mips32r2"
     goos: [linux]
-    goarch: [mips]
+    goarch: [mipsle]
     ldflags:
       - "-s -w"
     flags:
