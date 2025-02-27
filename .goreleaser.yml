@@ -6,10 +6,10 @@ before:
     - go mod tidy
 
 builds:
-  # 仅 MIPS（ER-X-SFP 专用）
+  # MIPS 专用配置
   - binary: iptv
     main: ./cmd/iptv/main.go
-    id: mips  # 唯一标识
+    id: mips
     env:
       - CGO_ENABLED=0
       - GOMIPS=softfloat
@@ -19,9 +19,13 @@ builds:
       - "-s -w"
     flags:
       - "-trimpath"
+    post:
+      - cmd: upx --best {{ .Path }}  # 压缩
 
+  # 其他架构配置
   - binary: iptv
     main: ./cmd/iptv/main.go
+    id: common
     env:
       - CGO_ENABLED=0
     goos:
@@ -66,14 +70,15 @@ archives:
       - config.yml
       - src: "logos/*.png"
         dst: logos
+
 changelog:
   sort: asc
   groups:
     - title: Features
-      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      regexp: '^.*?feat($[[:word:]]+$)??!?:.+$'
       order: 0
     - title: "Bug fixes"
-      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      regexp: '^.*?fix($[[:word:]]+$)??!?:.+$'
       order: 1
     - title: Others
       order: 999
