@@ -6,7 +6,7 @@ before:
     - go mod tidy
 
 builds:
-  # MIPS 专用配置
+  # MIPS 专用配置（ER-X-SFP 大端序）
   - binary: iptv
     main: ./cmd/iptv/main.go
     id: mips
@@ -19,13 +19,10 @@ builds:
       - "-s -w"
     flags:
       - "-trimpath"
-    post:
-      - cmd: upx --best {{ .Path }}  # 压缩
 
-  # 其他架构配置
+  # 其他通用架构配置
   - binary: iptv
     main: ./cmd/iptv/main.go
-    id: common
     env:
       - CGO_ENABLED=0
     goos:
@@ -85,6 +82,4 @@ changelog:
   filters:
     exclude:
       - "^docs:"
-      - "^style:"
-      - "^test:"
-      - "^chore:"
+      - "^
