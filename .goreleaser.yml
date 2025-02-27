@@ -6,12 +6,25 @@ before:
     - go mod tidy
 
 builds:
+  # 仅 MIPS（ER-X-SFP 专用）
+  - binary: iptv
+    main: ./cmd/iptv/main.go
+    id: mipsle  # 唯一标识
+    env:
+      - CGO_ENABLED=0
+      - GOMIPS=hardfloat
+      - GOFLAGS="-gccgoflags=-march=mips32r2"
+    goos: [linux]
+    goarch: [mipsle]
+    ldflags:
+      - "-s -w"
+    flags:
+      - "-trimpath"
+
   - binary: iptv
     main: ./cmd/iptv/main.go
     env:
       - CGO_ENABLED=0
-      - GOFLAGS="-gccgoflags=-march=mips32r2"
-      - GOMIPS=hardfloat
     goos:
       - windows
       - darwin
@@ -20,7 +33,6 @@ builds:
       - amd64
       - arm
       - arm64
-      - mipsle
     goarm:
       - 6
       - 7
