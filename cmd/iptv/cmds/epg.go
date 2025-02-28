@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 	"iptv/internal/app/iptv/hwctc"
-	"iptv/internal/pkg/router"
+	"iptv/internal/app/router"
 	"os"
 	"time"
 
