@@ -51,7 +51,7 @@ func NewEPGCLI() *cobra.Command {
 			}
 
 			// 生成XML结构
-			xmlEPG := router.GetXmlEPG(chProgLists, backDays)
+			xmlEPG := router.GetXmlEPGData(chProgLists, backDays)
 			xmlData, err := xml.MarshalIndent(xmlEPG, "", "  ")
 			if err != nil {
 				return fmt.Errorf("XML编码失败: %w", err)

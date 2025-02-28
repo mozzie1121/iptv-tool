@@ -28,7 +28,7 @@ func UpdateEPG(ctx context.Context, client iptv.Client) error {
 }
 
 // GetXmlEPG 生成 XMLTV 结构（供外部调用）
-func GetXmlEPG(chProgLists []iptv.ChannelProgramList, backDay int) *XmlEPG {
+func GetXmlEPGData(chProgLists []iptv.ChannelProgramList, backDay int) *XmlEPG {
 	return getXmlEPG(chProgLists, backDay)
 }
 
