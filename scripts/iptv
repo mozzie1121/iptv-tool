@@ -11,11 +11,11 @@ start(){
 
 stop(){
         # kill your pid
-        kill -9 `ps | grep '$IPTV_HOME/iptv' | grep -v 'grep' | awk '{print $1}'`
+        kill -9 `ps | grep "$IPTV_HOME/iptv" | grep -v 'grep' | awk '{print $1}'`
 }
 
 restart(){
-        kill -9 `ps | grep '$IPTV_HOME/iptv' | grep -v 'grep' | awk '{print $1}'`
+        kill -9 `ps | grep "$IPTV_HOME/iptv" | grep -v 'grep' | awk '{print $1}'`
         # Example
         nohup $IPTV_HOME/iptv serve -i 24h -p 8088 -u inner=http://192.168.3.1:4022 > /dev/null 2>&1 &
 }
