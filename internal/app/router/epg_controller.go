@@ -16,6 +16,22 @@ import (
 	"go.uber.org/zap"
 )
 
+// 导出全局变量（原子指针）
+var (
+	EpgPtr = &epgPtr // 导出原子指针的地址，外部通过 EpgPtr.Load() 读取
+)
+
+
+// UpdateEPG 更新EPG缓存数据（供外部调用）
+func UpdateEPG(ctx context.Context, client iptv.Client) error {
+	return updateEPG(ctx, client)
+}
+
+// GetXmlEPG 生成 XMLTV 结构（供外部调用）
+func GetXmlEPG(chProgLists []iptv.ChannelProgramList, backDay int) *XmlEPG {
+	return getXmlEPG(chProgLists, backDay)
+}
+
 const (
 	xmltvGenInfoName = "iptv-tool"
 	xmltvGenInfoUrl  = "https://github.com/super321/iptv-tool"

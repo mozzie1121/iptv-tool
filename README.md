@@ -36,6 +36,22 @@ Key后面的即是)。
 说明：运行完毕后会在当前目录下生成iptv.m3u文件，通过-u参数指定软路由的udpxy的http地址。
 更多参数说明可通过命令`./iptv channel -h`查看。
 
+
+* 导出EPG数据（使用默认配置）
+
+```
+./iptv epg -o epg.xml
+```
+
+* 指定配置文件并启用压缩
+
+```
+./iptv --config /path/to/custom.yml epg -z -o epg.xml.gz
+```
+
+说明：运行完毕后会在当前目录下生成epg.xml文件，通过-z参数生成压缩格式的节目单。
+更多参数说明可通过命令`./iptv epg -h`查看。
+
 * 启动HTTP服务，提供在线m3u和epg接口：
 
 ```

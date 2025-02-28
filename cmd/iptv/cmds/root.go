@@ -33,6 +33,7 @@ func NewRootCLI() *cobra.Command {
 	rootCmd.AddCommand(NewKeyCLI())
 	rootCmd.AddCommand(NewChannelCLI())
 	rootCmd.AddCommand(NewServeCLI())
+	rootCmd.AddCommand(NewEPGCLI())
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "JSON配置文件的路径")
 
 	return rootCmd
