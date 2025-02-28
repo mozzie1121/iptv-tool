@@ -6,26 +6,6 @@ before:
     - go mod tidy
 
 builds:
-  # MIPS 专用配置（ER-X-SFP 大端序）
-  - binary: iptv
-    main: ./cmd/iptv/main.go
-<<<<<<< HEAD
-    id: mips
-=======
-    id: mipsle  # 唯一标识
->>>>>>> parent of 01951db (Update .goreleaser.yml)
-    env:
-      - CGO_ENABLED=0
-      - GOMIPS=hardfloat
-      - GOFLAGS="-gccgoflags=-march=mips32r2"
-    goos: [linux]
-    goarch: [mipsle]
-    ldflags:
-      - "-s -w"
-    flags:
-      - "-trimpath"
-
-  # 其他通用架构配置
   - binary: iptv
     main: ./cmd/iptv/main.go
     env:
@@ -72,19 +52,20 @@ archives:
       - config.yml
       - src: "logos/*.png"
         dst: logos
-
 changelog:
   sort: asc
   groups:
     - title: Features
-      regexp: '^.*?feat($[[:word:]]+$)??!?:.+$'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
       order: 0
     - title: "Bug fixes"
-      regexp: '^.*?fix($[[:word:]]+$)??!?:.+$'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
       order: 1
     - title: Others
       order: 999
   filters:
     exclude:
       - "^docs:"
-      - "^
+      - "^style:"
+      - "^test:"
+      - "^chore:"
