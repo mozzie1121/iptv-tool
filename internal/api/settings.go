@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -120,26 +122,29 @@ func (sc *SettingsController) UploadFFprobe(c *gin.Context) {
 	}
 
 	targetPath := filepath.Join(detectDir, targetName)
+	targetExt := filepath.Ext(targetName)
+	targetBase := strings.TrimSuffix(targetName, targetExt)
+	tmpPath := filepath.Join(detectDir, "."+targetBase+".upload-"+strconv.FormatInt(time.Now().UnixNano(), 10)+targetExt)
 
-	// Save uploaded file
-	if err := c.SaveUploadedFile(file, targetPath); err != nil {
+	// Save to a temporary path first. The existing ffprobe is replaced only
+	// after the uploaded file has been verified successfully.
+	if err := c.SaveUploadedFile(file, tmpPath); err != nil {
 		slog.Error("Failed to save ffprobe file", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": i18n.T(i18n.Lang(c), "error.save_file_failed")})
 		return
 	}
+	defer os.Remove(tmpPath)
 
 	// Set executable permission (Unix-like systems)
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(targetPath, 0755); err != nil {
+		if err := os.Chmod(tmpPath, 0755); err != nil {
 			slog.Warn("Failed to set executable permission", "error", err)
 		}
 	}
 
 	// Verify the uploaded file is actually ffprobe
-	version, source, err := sc.detectService.GetFFprobeVersion()
-	if err != nil || source != "uploaded" {
-		// Remove invalid file
-		os.Remove(targetPath)
+	version, err := sc.detectService.ValidateFFprobePath(tmpPath)
+	if err != nil {
 		errMsg := "unrecognized file"
 		if err != nil {
 			errMsg = err.Error()
@@ -148,11 +153,43 @@ func (sc *SettingsController) UploadFFprobe(c *gin.Context) {
 		return
 	}
 
+	if err := replaceFilePreservingExisting(tmpPath, targetPath); err != nil {
+		slog.Error("Failed to replace ffprobe file", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": i18n.T(i18n.Lang(c), "error.save_file_failed")})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":         i18n.T(i18n.Lang(c), "message.ffprobe_uploaded"),
 		"ffprobe_version": version,
-		"ffprobe_source":  source,
+		"ffprobe_source":  "uploaded",
 	})
+}
+
+func replaceFilePreservingExisting(tmpPath, targetPath string) error {
+	backupPath := targetPath + ".bak-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+	hadExisting := false
+
+	if _, err := os.Stat(targetPath); err == nil {
+		hadExisting = true
+		if err := os.Rename(targetPath, backupPath); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.Rename(tmpPath, targetPath); err != nil {
+		if hadExisting {
+			_ = os.Rename(backupPath, targetPath)
+		}
+		return err
+	}
+
+	if hadExisting {
+		_ = os.Remove(backupPath)
+	}
+	return nil
 }
 
 // upsertSetting creates or updates a system setting

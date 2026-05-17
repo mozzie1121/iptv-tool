@@ -36,6 +36,21 @@ func (s *LiveSourceService) FetchAndUpdate(sourceID uint) error {
 		return nil // Source is disabled, skip
 	}
 
+	claim := model.DB.Model(&model.LiveSource{}).
+		Where("id = ? AND is_syncing = ?", sourceID, false).
+		Update("is_syncing", true)
+	if claim.Error != nil {
+		return fmt.Errorf("failed to mark live source syncing: %w", claim.Error)
+	}
+	if claim.RowsAffected == 0 {
+		return fmt.Errorf("error.source_syncing")
+	}
+
+	defer func() {
+		// Defensive cleanup
+		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
+	}()
+
 	// For IPTV sources, acquire per-source mutex to prevent concurrent access
 	// with the associated IPTV EPG source (IPTV servers reject concurrent auth)
 	if source.Type == model.LiveSourceTypeIPTV {
@@ -44,14 +59,6 @@ func (s *LiveSourceService) FetchAndUpdate(sourceID uint) error {
 		defer unlock()
 		slog.Info("Acquired IPTV lock for live source", "id", sourceID)
 	}
-
-	// Mark as syncing in case this was triggered by a cron job
-	model.DB.Model(&source).Update("is_syncing", true)
-
-	defer func() {
-		// Defensive cleanup
-		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
-	}()
 
 	var channels []m3u.Channel
 	var fetchErr error

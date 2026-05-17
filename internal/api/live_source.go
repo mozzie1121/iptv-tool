@@ -208,7 +208,7 @@ func (lc *LiveSourceController) Create(c *gin.Context) {
 		CronDetect:     req.CronDetect,
 		DetectStrategy: req.DetectStrategy,
 		Status:         true,
-		IsSyncing:      true,
+		IsSyncing:      false,
 		IPTVConfig:     string(req.IPTVConfig),
 	}
 
@@ -227,7 +227,7 @@ func (lc *LiveSourceController) Create(c *gin.Context) {
 			LiveSourceID: &source.ID,
 			CronTime:     req.CronTime,
 			Status:       true,
-			IsSyncing:    true,
+			IsSyncing:    false,
 			IPTVConfig:   string(req.IPTVConfig),
 		}
 		if err := model.DB.Create(&epgSource).Error; err == nil {
@@ -255,7 +255,7 @@ func (lc *LiveSourceController) Create(c *gin.Context) {
 				Headers:   source.Headers,
 				CronTime:  req.CronTime,
 				Status:    true,
-				IsSyncing: true,
+				IsSyncing: false,
 			}
 			if err := model.DB.Create(&epgSource).Error; err == nil {
 				slog.Info("Auto-created EPG source from x-tvg-url", "epg_id", epgSource.ID, "url", tvgURL, "live_source", source.Name)
@@ -486,7 +486,7 @@ func (lc *LiveSourceController) Update(c *gin.Context) {
 						Headers:   source.Headers,
 						CronTime:  source.CronTime,
 						Status:    true,
-						IsSyncing: true,
+						IsSyncing: false,
 					}
 					if err := model.DB.Create(&epgSource).Error; err == nil {
 						slog.Info("Auto-created EPG source from x-tvg-url (update)", "epg_id", epgSource.ID, "url", tvgURL, "live_source", source.Name)
@@ -651,8 +651,6 @@ func (lc *LiveSourceController) Trigger(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.invalid_id")})
 		return
 	}
-
-	model.DB.Model(&model.LiveSource{}).Where("id = ?", uint(id)).Update("is_syncing", true)
 
 	lc.scheduler.TriggerLiveSourceNow(uint(id))
 	c.JSON(http.StatusOK, gin.H{"message": i18n.T(i18n.Lang(c), "message.trigger_fetch")})

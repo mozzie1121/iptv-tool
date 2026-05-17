@@ -33,8 +33,15 @@ func (s *EPGSourceService) FetchAndUpdate(sourceID uint) error {
 		return nil // Source is disabled, skip
 	}
 
-	// Mark as syncing in case this was triggered by a cron job
-	model.DB.Model(&source).Update("is_syncing", true)
+	claim := model.DB.Model(&model.EPGSource{}).
+		Where("id = ? AND is_syncing = ?", sourceID, false).
+		Update("is_syncing", true)
+	if claim.Error != nil {
+		return fmt.Errorf("failed to mark EPG source syncing: %w", claim.Error)
+	}
+	if claim.RowsAffected == 0 {
+		return fmt.Errorf("error.source_syncing")
+	}
 
 	defer func() {
 		// Defensive cleanup

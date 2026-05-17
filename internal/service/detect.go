@@ -41,8 +41,7 @@ func (s *DetectService) GetFFprobePath() (string, string, error) {
 
 	// 1. Try uploaded version first
 	if stat, err := os.Stat(uploadedPath); err == nil && !stat.IsDir() {
-		cmd := exec.Command(uploadedPath, "-version")
-		if err := cmd.Run(); err == nil {
+		if _, err := s.probeFFprobeVersion(uploadedPath); err == nil {
 			return uploadedPath, "uploaded", nil
 		} else {
 			// Uploaded file exists but cannot run
@@ -57,8 +56,7 @@ func (s *DetectService) GetFFprobePath() (string, string, error) {
 	// 2. Try system version if uploaded doesn't exist
 	systemPath, err := exec.LookPath(name)
 	if err == nil {
-		cmd := exec.Command(systemPath, "-version")
-		if err := cmd.Run(); err == nil {
+		if _, err := s.probeFFprobeVersion(systemPath); err == nil {
 			return systemPath, "system", nil
 		}
 	}
@@ -73,21 +71,34 @@ func (s *DetectService) GetFFprobeVersion() (string, string, error) {
 		return "", "", err
 	}
 
+	version, err := s.probeFFprobeVersion(ffprobePath)
+	if err != nil {
+		return "", source, fmt.Errorf("failed to get ffprobe version: %w", err)
+	}
+	return version, source, nil
+}
+
+// ValidateFFprobePath verifies a specific file by running "ffprobe -version".
+func (s *DetectService) ValidateFFprobePath(ffprobePath string) (string, error) {
+	return s.probeFFprobeVersion(ffprobePath)
+}
+
+func (s *DetectService) probeFFprobeVersion(ffprobePath string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, ffprobePath, "-version")
 	output, err := cmd.Output()
 	if err != nil {
-		return "", source, fmt.Errorf("failed to get ffprobe version: %w", err)
+		return "", err
 	}
 
 	// Parse first line: "ffprobe version N-xxxxx-gxxxxxxx Copyright ..."
 	lines := strings.Split(string(output), "\n")
 	if len(lines) > 0 {
-		return strings.TrimSpace(lines[0]), source, nil
+		return strings.TrimSpace(lines[0]), nil
 	}
-	return "unknown", source, nil
+	return "unknown", nil
 }
 
 // getDetectConfig reads concurrency and timeout settings from the database
@@ -127,11 +138,6 @@ func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy stri
 		return nil // Source is disabled, skip
 	}
 
-	// Check if already detecting
-	if source.IsDetecting {
-		return fmt.Errorf("error.source_detecting")
-	}
-
 	// Check syncing status
 	if manual {
 		if source.IsSyncing {
@@ -150,11 +156,11 @@ func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy stri
 		return err
 	}
 
-	// Mark as detecting
-	model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).UpdateColumn("is_detecting", true)
-	defer func() {
-		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).UpdateColumn("is_detecting", false)
-	}()
+	releaseDetecting, err := claimSourceDetecting(sourceID)
+	if err != nil {
+		return err
+	}
+	defer releaseDetecting()
 
 	// Reset latency, video_codec, video_resolution, and detected_at for all channels in this source before detecting
 	model.DB.Model(&model.ParsedChannel{}).Where("source_id = ?", sourceID).Updates(map[string]interface{}{
@@ -230,6 +236,21 @@ func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy stri
 
 	slog.Info("Channel detection completed", "source_id", sourceID, "channels", len(channels))
 	return nil
+}
+
+func claimSourceDetecting(sourceID uint) (func(), error) {
+	claim := model.DB.Model(&model.LiveSource{}).
+		Where("id = ? AND is_detecting = ?", sourceID, false).
+		UpdateColumn("is_detecting", true)
+	if claim.Error != nil {
+		return nil, fmt.Errorf("failed to mark source detecting: %w", claim.Error)
+	}
+	if claim.RowsAffected == 0 {
+		return nil, fmt.Errorf("error.source_detecting")
+	}
+	return func() {
+		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).UpdateColumn("is_detecting", false)
+	}, nil
 }
 
 // ffprobeResult represents the JSON output from ffprobe -show_streams

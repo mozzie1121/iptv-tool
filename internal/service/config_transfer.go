@@ -9,12 +9,14 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"iptv-tool-v2/internal/model"
 	"iptv-tool-v2/internal/version"
+	"iptv-tool-v2/pkg/utils"
 )
 
 // --- Export/Import module constants ---
@@ -30,6 +32,8 @@ const (
 
 // AllModules lists all supported modules in dependency order.
 var AllModules = []string{ModuleSources, ModuleLogos, ModuleRules, ModulePublish, ModuleDetect, ModuleAccessControl}
+
+var importPublishPathPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // --- Manifest ---
 
@@ -70,6 +74,19 @@ type ImportParsedData struct {
 	DetectSettings map[string]string          `json:"-"` // key -> value
 	ACLMode        string                     `json:"-"`
 	ACLEntries     []model.AccessControlEntry `json:"-"`
+}
+
+// HasModule reports whether the import manifest includes a module.
+func (d *ImportParsedData) HasModule(module string) bool {
+	if d == nil {
+		return false
+	}
+	for _, m := range d.Manifest.Modules {
+		if m == module {
+			return true
+		}
+	}
+	return false
 }
 
 // ImportPublishInterface wraps model.PublishInterface with legacy fields for backward compatibility.
@@ -332,7 +349,12 @@ func (s *ConfigTransferService) ParseImportZip(zipData []byte) (*ImportParsedDat
 					continue
 				}
 				fileName := strings.TrimPrefix(name, "logos/files/")
-				data.LogoFiles[fileName] = raw
+				safeFileName, err := sanitizeImportLogoFilename(fileName)
+				if err != nil {
+					slog.Warn("Import: skip unsafe logo file", "name", name, "error", err)
+					continue
+				}
+				data.LogoFiles[safeFileName] = raw
 			}
 		}
 		data.Summaries = append(data.Summaries, ImportModuleSummary{
@@ -659,16 +681,22 @@ func (s *ConfigTransferService) importLogos(data *ImportParsedData) ModuleResult
 
 	for _, logo := range data.Logos {
 		// Use FileName from the export struct (FilePath has json:"-" in the model)
-		if logo.FileName == "" {
+		safeFileName, err := sanitizeImportLogoFilename(logo.FileName)
+		if err != nil {
 			mr.Failed++
-			mr.Details = append(mr.Details, fmt.Sprintf("Logo \"%s\": missing file name in export data", logo.Name))
+			mr.Details = append(mr.Details, fmt.Sprintf("Logo \"%s\": invalid file name in export data", logo.Name))
 			continue
 		}
-		newFilePath := filepath.Join(s.logoDir, logo.FileName)
-		newURLPath := "/logo/" + logo.FileName
+		newFilePath, err := utils.SafeJoinWithinDir(s.logoDir, safeFileName)
+		if err != nil {
+			mr.Failed++
+			mr.Details = append(mr.Details, fmt.Sprintf("Logo \"%s\": invalid target path", logo.Name))
+			continue
+		}
+		newURLPath := "/logo/" + safeFileName
 
 		// Look up file data from ZIP
-		fileData, hasFile := data.LogoFiles[logo.FileName]
+		fileData, hasFile := data.LogoFiles[safeFileName]
 		if !hasFile {
 			mr.Failed++
 			mr.Details = append(mr.Details, fmt.Sprintf("Logo \"%s\": file not found in ZIP", logo.Name))
@@ -676,7 +704,7 @@ func (s *ConfigTransferService) importLogos(data *ImportParsedData) ModuleResult
 		}
 
 		var existing model.ChannelLogo
-		err := model.DB.Where("name = ?", logo.Name).First(&existing).Error
+		err = model.DB.Where("name = ?", logo.Name).First(&existing).Error
 		if err == nil {
 			// Overwrite: remove old file
 			os.Remove(existing.FilePath)
@@ -718,6 +746,26 @@ func (s *ConfigTransferService) importLogos(data *ImportParsedData) ModuleResult
 	}
 
 	return mr
+}
+
+func sanitizeImportLogoFilename(fileName string) (string, error) {
+	safeFileName, err := utils.SafeBaseFilename(fileName)
+	if err != nil {
+		return "", err
+	}
+	ext := strings.ToLower(filepath.Ext(safeFileName))
+	if !allowedImportLogoExts[ext] {
+		return "", fmt.Errorf("unsupported logo extension")
+	}
+	if strings.TrimSpace(strings.TrimSuffix(safeFileName, filepath.Ext(safeFileName))) == "" {
+		return "", fmt.Errorf("empty logo basename")
+	}
+	return safeFileName, nil
+}
+
+var allowedImportLogoExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".svg": true, ".webp": true, ".ico": true,
 }
 
 func (s *ConfigTransferService) importRules(data *ImportParsedData, ruleIDMap map[uint]uint) ModuleResult {
@@ -791,6 +839,12 @@ func (s *ConfigTransferService) importPublish(data *ImportParsedData, liveIDMap,
 
 	for _, importIface := range data.PublishIfaces {
 		iface := importIface.PublishInterface
+		if !importPublishPathPattern.MatchString(strings.TrimSpace(iface.Path)) {
+			mr.Failed++
+			mr.Details = append(mr.Details, fmt.Sprintf("Publish \"%s\": invalid path", iface.Name))
+			continue
+		}
+		iface.Path = strings.TrimSpace(iface.Path)
 
 		// Migrate legacy filter_invalid_source_ids to detect_filter_config
 		if iface.DetectFilterConfig == "" && importIface.LegacyFilterInvalidSourceIDs != "" {
@@ -831,10 +885,14 @@ func (s *ConfigTransferService) importPublish(data *ImportParsedData, liveIDMap,
 				"fcc_type":              iface.FCCType,
 				"custom_params":         iface.CustomParams,
 				"m3u_catchup_template":  iface.M3UCatchupTemplate,
+				"unicast_type":          iface.UnicastType,
+				"unicast_proxy_rules":   iface.UnicastProxyRules,
 				"detect_filter_config":  iface.DetectFilterConfig,
 				"source_output_configs": iface.SourceOutputConfigs,
 				"ua_check_enabled":      iface.UACheckEnabled,
 				"ua_allowed_values":     iface.UAAllowedValues,
+				"token_check_enabled":   iface.TokenCheckEnabled,
+				"token_value":           iface.TokenValue,
 			}
 			if err := model.DB.Model(&existing).Updates(updates).Error; err != nil {
 				mr.Failed++
@@ -889,9 +947,14 @@ func (s *ConfigTransferService) importAccessControl(data *ImportParsedData) Modu
 
 	// Replace all entries
 	model.DB.Where("1 = 1").Delete(&model.AccessControlEntry{})
+	if data.ACLMode == "disabled" {
+		mr.Skipped += len(data.ACLEntries)
+		return mr
+	}
 	for _, entry := range data.ACLEntries {
 		newEntry := entry
 		newEntry.ID = 0
+		newEntry.ListType = data.ACLMode
 		if err := model.DB.Create(&newEntry).Error; err != nil {
 			mr.Failed++
 			mr.Details = append(mr.Details, fmt.Sprintf("ACL entry \"%s\": create failed: %s", entry.Value, err.Error()))

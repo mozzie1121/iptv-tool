@@ -576,9 +576,21 @@ const defaultForm = () => ({
 })
 const form = reactive(defaultForm())
 const activeSourcePanels = ref([])
+const publishPathPattern = /^[A-Za-z0-9._-]+$/
+const validatePublishPath = (_rule, value, callback) => {
+  if (!value) {
+    callback(new Error(t('publish.path_required')))
+    return
+  }
+  if (!publishPathPattern.test(value)) {
+    callback(new Error(t('publish.path_invalid')))
+    return
+  }
+  callback()
+}
 const formRules = computed(() => ({
   name: [{ required: true, message: t('publish.name_required'), trigger: 'blur' }],
-  path: [{ required: true, message: t('publish.path_required'), trigger: 'blur' }],
+  path: [{ validator: validatePublishPath, trigger: 'blur' }],
   format: [{ required: true, message: t('publish.format_required'), trigger: 'change' }],
   source_ids_arr: [{ required: true, message: t('publish.source_required'), trigger: 'change', type: 'array', min: 1 }],
 }))

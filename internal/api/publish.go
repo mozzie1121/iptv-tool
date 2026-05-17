@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -13,6 +14,12 @@ import (
 	"iptv-tool-v2/internal/task"
 	"iptv-tool-v2/pkg/i18n"
 )
+
+var publishPathPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+func isValidPublishPath(path string) bool {
+	return publishPathPattern.MatchString(path)
+}
 
 // requestSchemeFromContext determines the URL scheme (http or https) from the request.
 // It checks X-Forwarded-Proto header first (for reverse proxy setups),
@@ -110,6 +117,11 @@ func (pc *PublishController) CreateInterface(c *gin.Context) {
 	req.UDPxyURL = strings.TrimSpace(req.UDPxyURL)
 	req.M3UCatchupTemplate = strings.TrimSpace(req.M3UCatchupTemplate)
 	req.TokenValue = strings.TrimSpace(req.TokenValue)
+
+	if !isValidPublishPath(req.Path) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.invalid_publish_path")})
+		return
+	}
 
 	// Validate format based on type
 	if req.Type == "live" && (req.Format != model.PublishFormatM3U && req.Format != model.PublishFormatTXT) {
@@ -260,6 +272,10 @@ func (pc *PublishController) UpdateInterface(c *gin.Context) {
 		updates["description"] = *req.Description
 	}
 	if req.Path != nil {
+		if !isValidPublishPath(*req.Path) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.invalid_publish_path")})
+			return
+		}
 		// Check uniqueness
 		var existing int64
 		// Combine type and path for uniqueness check

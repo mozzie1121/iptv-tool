@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,7 +15,37 @@ import (
 	"iptv-tool-v2/internal/model"
 	"iptv-tool-v2/internal/publish"
 	"iptv-tool-v2/pkg/i18n"
+	"iptv-tool-v2/pkg/utils"
 )
+
+var (
+	errInvalidLogoFilename = errors.New("invalid logo filename")
+	errUnsupportedLogoExt  = errors.New("unsupported logo file extension")
+)
+
+var allowedLogoExts = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".svg": true, ".webp": true, ".ico": true,
+}
+
+func parseLogoUploadFilename(filename string) (name string, ext string, err error) {
+	safeName, err := utils.SafeBaseFilename(filename)
+	if err != nil {
+		return "", "", errInvalidLogoFilename
+	}
+
+	originalExt := filepath.Ext(safeName)
+	ext = strings.ToLower(originalExt)
+	if !allowedLogoExts[ext] {
+		return "", "", errUnsupportedLogoExt
+	}
+
+	name = strings.TrimSpace(strings.TrimSuffix(safeName, originalExt))
+	if name == "" {
+		return "", "", errInvalidLogoFilename
+	}
+	return name, ext, nil
+}
 
 // LogoController handles channel logo CRUD and upload
 type LogoController struct {
@@ -48,16 +79,15 @@ func (lc *LogoController) Upload(c *gin.Context) {
 		return
 	}
 
-	// Validate file type
-	ext := strings.ToLower(filepath.Ext(file.Filename))
-	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".webp": true, ".ico": true}
-	if !allowedExts[ext] {
+	name, ext, err := parseLogoUploadFilename(file.Filename)
+	if errors.Is(err, errInvalidLogoFilename) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.invalid_logo_filename")})
+		return
+	}
+	if errors.Is(err, errUnsupportedLogoExt) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.unsupported_file_type")})
 		return
 	}
-
-	// Generate unique filename
-	name := strings.TrimSuffix(file.Filename, ext)
 
 	// Check for logo name uniqueness
 	var existing int64
@@ -68,7 +98,11 @@ func (lc *LogoController) Upload(c *gin.Context) {
 	}
 
 	fileName := fmt.Sprintf("%s_%d%s", name, model.DB.NowFunc().UnixMilli(), ext)
-	filePath := filepath.Join(lc.logoDir, fileName)
+	filePath, err := utils.SafeJoinWithinDir(lc.logoDir, fileName)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.invalid_logo_filename")})
+		return
+	}
 	urlPath := "/logo/" + fileName
 
 	if err := c.SaveUploadedFile(file, filePath); err != nil {
@@ -108,33 +142,38 @@ func (lc *LogoController) BatchUpload(c *gin.Context) {
 		return
 	}
 
-	allowedExts := map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".svg": true, ".webp": true, ".ico": true}
 	var uploaded []model.ChannelLogo
-	var errors []string
+	var uploadErrors []string
 
 	for _, file := range files {
-		ext := strings.ToLower(filepath.Ext(file.Filename))
-		if !allowedExts[ext] {
-			errors = append(errors, i18n.T(i18n.Lang(c), "error.batch_unsupported_type", file.Filename))
+		name, ext, err := parseLogoUploadFilename(file.Filename)
+		if errors.Is(err, errInvalidLogoFilename) {
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.invalid_logo_filename")+": "+file.Filename)
 			continue
 		}
-
-		name := strings.TrimSuffix(file.Filename, ext)
+		if errors.Is(err, errUnsupportedLogoExt) {
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.batch_unsupported_type", file.Filename))
+			continue
+		}
 
 		// Check for logo name uniqueness
 		var existing int64
 		model.DB.Model(&model.ChannelLogo{}).Where("name = ?", name).Count(&existing)
 		if existing > 0 {
-			errors = append(errors, i18n.T(i18n.Lang(c), "error.batch_name_exists", file.Filename))
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.batch_name_exists", file.Filename))
 			continue
 		}
 
 		fileName := fmt.Sprintf("%s_%d%s", name, model.DB.NowFunc().UnixMilli(), ext)
-		filePath := filepath.Join(lc.logoDir, fileName)
+		filePath, err := utils.SafeJoinWithinDir(lc.logoDir, fileName)
+		if err != nil {
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.invalid_logo_filename")+": "+file.Filename)
+			continue
+		}
 		urlPath := "/logo/" + fileName
 
 		if err := c.SaveUploadedFile(file, filePath); err != nil {
-			errors = append(errors, i18n.T(i18n.Lang(c), "error.batch_save_failed", file.Filename))
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.batch_save_failed", file.Filename))
 			continue
 		}
 
@@ -145,7 +184,7 @@ func (lc *LogoController) BatchUpload(c *gin.Context) {
 		}
 		if err := model.DB.Create(&logo).Error; err != nil {
 			os.Remove(filePath)
-			errors = append(errors, i18n.T(i18n.Lang(c), "error.batch_db_error", file.Filename))
+			uploadErrors = append(uploadErrors, i18n.T(i18n.Lang(c), "error.batch_db_error", file.Filename))
 			continue
 		}
 
@@ -157,7 +196,7 @@ func (lc *LogoController) BatchUpload(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"uploaded": uploaded,
-		"errors":   errors,
+		"errors":   uploadErrors,
 	})
 }
 

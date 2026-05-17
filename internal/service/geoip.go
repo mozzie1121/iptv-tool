@@ -3,6 +3,7 @@ package service
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/oschwald/geoip2-golang/v2"
@@ -222,6 +224,7 @@ type progressReader struct {
 	svc           *GeoIPService
 	attempt       int
 	lastLoggedPct int // last logged percentage (0, 5, 10, ...)
+	onProgress    func()
 }
 
 func newProgressReader(r io.Reader, totalBytes int64, svc *GeoIPService, attempt int) *progressReader {
@@ -246,6 +249,9 @@ func (pr *progressReader) Read(p []byte) (int, error) {
 	if n > 0 {
 		pr.readBytes += int64(n)
 		pr.lastReadTime = time.Now()
+		if pr.onProgress != nil {
+			pr.onProgress()
+		}
 
 		// Update shared progress state
 		pr.svc.setDownloadProgress(pr.readBytes, pr.totalBytes, pr.attempt)
@@ -330,8 +336,31 @@ func (s *GeoIPService) DownloadAndExtract() error {
 }
 
 func (s *GeoIPService) downloadOnce(attempt int) error {
-	// Use a client with no global timeout; we rely on idle timeout instead
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var lastProgress atomic.Int64
+	lastProgress.Store(time.Now().UnixNano())
+	watchdogDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-watchdogDone:
+				return
+			case <-ticker.C:
+				if time.Since(time.Unix(0, lastProgress.Load())) > downloadIdleTimeout {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	defer close(watchdogDone)
+
 	client := &http.Client{
+		Timeout: 15 * time.Minute,
 		// Follow redirects (GitHub releases redirect)
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -341,8 +370,16 @@ func (s *GeoIPService) downloadOnce(attempt int) error {
 		},
 	}
 
-	resp, err := client.Get(geoipDownloadURL)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, geoipDownloadURL, nil)
 	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("download stalled: no data received for %v", downloadIdleTimeout)
+		}
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -353,10 +390,16 @@ func (s *GeoIPService) downloadOnce(attempt int) error {
 
 	// Wrap body with progress reader for idle timeout detection and logging
 	pr := newProgressReader(resp.Body, resp.ContentLength, s, attempt)
+	pr.onProgress = func() {
+		lastProgress.Store(time.Now().UnixNano())
+	}
 
 	// Extract .mmdb from tar.gz stream
 	gzReader, err := gzip.NewReader(pr)
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("download stalled: no data received for %v", downloadIdleTimeout)
+		}
 		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
 	defer gzReader.Close()
@@ -370,6 +413,9 @@ func (s *GeoIPService) downloadOnce(attempt int) error {
 			break
 		}
 		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("download stalled: no data received for %v", downloadIdleTimeout)
+			}
 			return fmt.Errorf("failed to read tar entry: %w", err)
 		}
 
@@ -386,6 +432,9 @@ func (s *GeoIPService) downloadOnce(attempt int) error {
 			outFile.Close()
 			if err != nil {
 				os.Remove(tmpPath)
+				if ctx.Err() != nil {
+					return fmt.Errorf("download stalled: no data received for %v", downloadIdleTimeout)
+				}
 				return fmt.Errorf("failed to write mmdb file: %w", err)
 			}
 

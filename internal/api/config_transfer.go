@@ -123,7 +123,20 @@ func (cc *ConfigTransferController) ImportExecute(c *gin.Context) {
 		return
 	}
 
+	if parsed.HasModule(service.ModuleAccessControl) {
+		entries := accessControlEntryRequestsFromModels(parsed.ACLEntries)
+		if key, index, detail := validateAccessControlConfig(parsed.ACLMode, entries, c.ClientIP()); key != "" {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": accessControlValidationMessage(i18n.Lang(c), key, index, detail),
+			})
+			return
+		}
+	}
+
 	result := cc.svc.ExecuteImport(parsed)
+	if parsed.HasModule(service.ModuleAccessControl) {
+		globalACLCache.invalidate()
+	}
 	publish.InvalidateAll()
 	c.JSON(http.StatusOK, result)
 }

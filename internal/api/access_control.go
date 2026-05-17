@@ -78,6 +78,65 @@ func validateEntryValue(entry AccessControlEntryRequest) error {
 	return nil
 }
 
+func validateAccessControlConfig(mode string, entries []AccessControlEntryRequest, clientIP string) (string, int, error) {
+	switch mode {
+	case "disabled":
+		return "", 0, nil
+	case "whitelist", "blacklist":
+	default:
+		return "error.invalid_request_params", 0, nil
+	}
+
+	for i, e := range entries {
+		e.Value = strings.TrimSpace(e.Value)
+		if err := validateEntryValue(e); err != nil {
+			return "error.acl_invalid_entry", i + 1, err
+		}
+		if mode == "blacklist" && e.EntryType != "single" {
+			return "error.acl_blacklist_single_only", i + 1, nil
+		}
+	}
+
+	tempEntries := make([]model.AccessControlEntry, 0, len(entries))
+	for _, e := range entries {
+		tempEntries = append(tempEntries, model.AccessControlEntry{
+			ListType:  mode,
+			EntryType: e.EntryType,
+			Value:     strings.TrimSpace(e.Value),
+			BlockDays: e.BlockDays,
+		})
+	}
+
+	if !IsIPAllowed(clientIP, mode, tempEntries) {
+		return "error.acl_self_lockout", 0, nil
+	}
+
+	return "", 0, nil
+}
+
+func accessControlValidationMessage(lang, key string, index int, detail error) string {
+	msg := i18n.T(lang, key)
+	if index > 0 && detail != nil {
+		return fmt.Sprintf("%s (#%d: %s)", msg, index, detail.Error())
+	}
+	if index > 0 {
+		return fmt.Sprintf("%s (#%d)", msg, index)
+	}
+	return msg
+}
+
+func accessControlEntryRequestsFromModels(entries []model.AccessControlEntry) []AccessControlEntryRequest {
+	reqs := make([]AccessControlEntryRequest, 0, len(entries))
+	for _, e := range entries {
+		reqs = append(reqs, AccessControlEntryRequest{
+			EntryType: e.EntryType,
+			Value:     e.Value,
+			BlockDays: e.BlockDays,
+		})
+	}
+	return reqs
+}
+
 // GetAccessControl returns the current access control settings
 // GET /api/settings/access-control
 func (ac *AccessControlController) GetAccessControl(c *gin.Context) {
@@ -114,44 +173,11 @@ func (ac *AccessControlController) UpdateAccessControl(c *gin.Context) {
 	lang := i18n.Lang(c)
 	clientIP := c.ClientIP()
 
-	// Validate all entry values before processing
-	if req.Mode == "whitelist" || req.Mode == "blacklist" {
-		for i, e := range req.Entries {
-			if err := validateEntryValue(e); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": fmt.Sprintf("%s (#%d: %s)", i18n.T(lang, "error.acl_invalid_entry"), i+1, err.Error()),
-				})
-				return
-			}
-			// Blacklist only supports single IP
-			if req.Mode == "blacklist" && e.EntryType != "single" {
-				c.JSON(http.StatusBadRequest, gin.H{
-					"error": fmt.Sprintf("%s (#%d)", i18n.T(lang, "error.acl_blacklist_single_only"), i+1),
-				})
-				return
-			}
-		}
-	}
-
-	// Self-lockout validation: build temporary entry list and check
-	if req.Mode == "whitelist" || req.Mode == "blacklist" {
-		listType := req.Mode
-		tempEntries := make([]model.AccessControlEntry, 0, len(req.Entries))
-		for _, e := range req.Entries {
-			tempEntries = append(tempEntries, model.AccessControlEntry{
-				ListType:  listType,
-				EntryType: e.EntryType,
-				Value:     e.Value,
-				BlockDays: e.BlockDays,
-			})
-		}
-
-		if !IsIPAllowed(clientIP, req.Mode, tempEntries) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": i18n.T(lang, "error.acl_self_lockout"),
-			})
-			return
-		}
+	if key, index, detail := validateAccessControlConfig(req.Mode, req.Entries, clientIP); key != "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": accessControlValidationMessage(lang, key, index, detail),
+		})
+		return
 	}
 
 	// Save mode to SystemSetting
