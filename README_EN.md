@@ -8,7 +8,7 @@
 ## Project Introduction
 IPTV Tool is a lightweight IPTV management and aggregation distribution platform developed with Go and Vue 3. The platform provides convenient features for live streaming source (M3U / TXT, etc.) management, EPG (Electronic Program Guide) fetching and synchronization, as well as channel logo management. Through local deployment, you can easily aggregate multiple network live stream sources and EPG data, and generate unified subscription links with one click for use by various players.
 
-The backend is built on a pure local storage structure using Go 1.25+ (Gin + GORM + SQLite), and the frontend uses Vue 3 (Element Plus + Vite), compiled and embedded into Go's single-file binary, achieving one-click distribution and minimalist deployment.
+The backend is built on a pure local storage structure using Go 1.26+ (Gin + GORM + SQLite), and the frontend uses Vue 3 (Element Plus + Vite), compiled and embedded into Go's single-file binary, achieving one-click distribution and minimalist deployment.
 
 ## Core Features
 

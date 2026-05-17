@@ -4,7 +4,7 @@ Guidance for AI coding agents working in the `iptv-tool-v2` repository.
 
 ## Project Overview
 
-IPTV management tool with a Go 1.25+ backend (Gin + GORM + SQLite) and an embedded Vue 3 frontend (Element Plus + Vite). The server aggregates live TV channel sources, fetches EPG data, and publishes subscriptions in M3U/TXT/XMLTV/DIYP formats. The Vue SPA is embedded into the Go binary at build time via `//go:embed` in `web/embed.go`. Full i18n support (zh, en, zh-Hant) with backend-driven locale loading.
+IPTV management tool with a Go 1.26+ backend (Gin + GORM + SQLite) and an embedded Vue 3 frontend (Element Plus + Vite). The server aggregates live TV channel sources, fetches EPG data, and publishes subscriptions in M3U/TXT/XMLTV/DIYP formats. The Vue SPA is embedded into the Go binary at build time via `//go:embed` in `web/embed.go`. Full i18n support (zh, en, zh-Hant) with backend-driven locale loading.
 
 ## Repository Structure
 
