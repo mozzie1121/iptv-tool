@@ -28,6 +28,24 @@ func translateError(lang string, err error) string {
 	return msg
 }
 
+func triggerErrorStatus(err error) int {
+	switch err.Error() {
+	case "error.source_syncing", "error.source_detecting", "error.source_refreshing":
+		return http.StatusConflict
+	case "error.ffprobe_not_found", "error.ffprobe_cannot_execute", "error.ffprobe_run_failed", "error.no_ffprobe":
+		return http.StatusBadRequest
+	default:
+		if strings.Contains(err.Error(), "not found") {
+			return http.StatusNotFound
+		}
+		return http.StatusInternalServerError
+	}
+}
+
+func respondTriggerError(c *gin.Context, err error) {
+	c.JSON(triggerErrorStatus(err), gin.H{"error": translateError(i18n.Lang(c), err)})
+}
+
 // LiveSourceController handles CRUD operations for live sources
 type LiveSourceController struct {
 	liveService *service.LiveSourceService
@@ -652,7 +670,10 @@ func (lc *LiveSourceController) Trigger(c *gin.Context) {
 		return
 	}
 
-	lc.scheduler.TriggerLiveSourceNow(uint(id))
+	if err := lc.scheduler.TriggerLiveSourceNow(uint(id)); err != nil {
+		respondTriggerError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": i18n.T(i18n.Lang(c), "message.trigger_fetch")})
 }
 
@@ -693,12 +714,6 @@ func (lc *LiveSourceController) TriggerDetect(c *gin.Context) {
 		return
 	}
 
-	// Check if ffprobe is available before triggering detection
-	if err := lc.scheduler.CheckFFprobe(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": i18n.T(i18n.Lang(c), "error.no_ffprobe")})
-		return
-	}
-
 	// Parse optional detect strategy from request body
 	var req struct {
 		DetectStrategy string `json:"detect_strategy"`
@@ -709,7 +724,10 @@ func (lc *LiveSourceController) TriggerDetect(c *gin.Context) {
 		strategy = "unicast" // default
 	}
 
-	lc.scheduler.TriggerDetectNow(uint(id), strategy)
+	if err := lc.scheduler.TriggerDetectNow(uint(id), strategy); err != nil {
+		respondTriggerError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": i18n.T(i18n.Lang(c), "message.trigger_detect")})
 }
 

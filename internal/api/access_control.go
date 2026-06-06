@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -74,44 +75,61 @@ func validateEntryValue(entry AccessControlEntryRequest) error {
 		if bytesCompare(startB, endB) > 0 {
 			return fmt.Errorf("start IP must not be greater than end IP: %s ~ %s", parts[0], parts[1])
 		}
+	default:
+		return fmt.Errorf("invalid entry type: %s", entry.EntryType)
 	}
 	return nil
 }
 
-func validateAccessControlConfig(mode string, entries []AccessControlEntryRequest, clientIP string) (string, int, error) {
-	switch mode {
-	case "disabled":
-		return "", 0, nil
-	case "whitelist", "blacklist":
-	default:
-		return "error.invalid_request_params", 0, nil
-	}
-
-	for i, e := range entries {
-		e.Value = strings.TrimSpace(e.Value)
-		if err := validateEntryValue(e); err != nil {
-			return "error.acl_invalid_entry", i + 1, err
-		}
-		if mode == "blacklist" && e.EntryType != "single" {
-			return "error.acl_blacklist_single_only", i + 1, nil
-		}
-	}
-
-	tempEntries := make([]model.AccessControlEntry, 0, len(entries))
+func accessControlEntryModelsFromRequests(mode string, entries []AccessControlEntryRequest) []model.AccessControlEntry {
+	models := make([]model.AccessControlEntry, 0, len(entries))
 	for _, e := range entries {
-		tempEntries = append(tempEntries, model.AccessControlEntry{
+		models = append(models, model.AccessControlEntry{
 			ListType:  mode,
 			EntryType: e.EntryType,
-			Value:     strings.TrimSpace(e.Value),
+			Value:     e.Value,
 			BlockDays: e.BlockDays,
 		})
 	}
+	return models
+}
 
-	if !IsIPAllowed(clientIP, mode, tempEntries) {
-		return "error.acl_self_lockout", 0, nil
+func validateAccessControlConfig(mode string, entries []model.AccessControlEntry, clientIP string) ([]model.AccessControlEntry, string, int, error) {
+	switch mode {
+	case "disabled":
+		return nil, "", 0, nil
+	case "whitelist", "blacklist":
+	default:
+		return nil, "error.invalid_request_params", 0, nil
 	}
 
-	return "", 0, nil
+	now := time.Now()
+	normalized := make([]model.AccessControlEntry, 0, len(entries))
+	for i, e := range entries {
+		entry := e
+		entry.ListType = mode
+		entry.Value = strings.TrimSpace(e.Value)
+		if err := validateEntryValue(AccessControlEntryRequest{
+			EntryType: entry.EntryType,
+			Value:     entry.Value,
+			BlockDays: entry.BlockDays,
+		}); err != nil {
+			return nil, "error.acl_invalid_entry", i + 1, err
+		}
+		if mode == "blacklist" && entry.EntryType != "single" {
+			return nil, "error.acl_blacklist_single_only", i + 1, nil
+		}
+		if mode == "blacklist" && entry.BlockDays != nil && *entry.BlockDays > 0 && entry.CreatedAt.IsZero() {
+			entry.CreatedAt = now
+		}
+		normalized = append(normalized, entry)
+	}
+
+	if !IsIPAllowed(clientIP, mode, normalized) {
+		return nil, "error.acl_self_lockout", 0, nil
+	}
+
+	return normalized, "", 0, nil
 }
 
 func accessControlValidationMessage(lang, key string, index int, detail error) string {
@@ -123,18 +141,6 @@ func accessControlValidationMessage(lang, key string, index int, detail error) s
 		return fmt.Sprintf("%s (#%d)", msg, index)
 	}
 	return msg
-}
-
-func accessControlEntryRequestsFromModels(entries []model.AccessControlEntry) []AccessControlEntryRequest {
-	reqs := make([]AccessControlEntryRequest, 0, len(entries))
-	for _, e := range entries {
-		reqs = append(reqs, AccessControlEntryRequest{
-			EntryType: e.EntryType,
-			Value:     e.Value,
-			BlockDays: e.BlockDays,
-		})
-	}
-	return reqs
 }
 
 // GetAccessControl returns the current access control settings
@@ -173,7 +179,9 @@ func (ac *AccessControlController) UpdateAccessControl(c *gin.Context) {
 	lang := i18n.Lang(c)
 	clientIP := c.ClientIP()
 
-	if key, index, detail := validateAccessControlConfig(req.Mode, req.Entries, clientIP); key != "" {
+	entries := accessControlEntryModelsFromRequests(req.Mode, req.Entries)
+	normalizedEntries, key, index, detail := validateAccessControlConfig(req.Mode, entries, clientIP)
+	if key != "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": accessControlValidationMessage(lang, key, index, detail),
 		})
@@ -206,13 +214,8 @@ func (ac *AccessControlController) UpdateAccessControl(c *gin.Context) {
 		model.DB.Where("list_type = ?", otherType).Delete(&model.AccessControlEntry{})
 
 		// Insert new entries
-		for _, e := range req.Entries {
-			entry := model.AccessControlEntry{
-				ListType:  listType,
-				EntryType: e.EntryType,
-				Value:     e.Value,
-				BlockDays: e.BlockDays,
-			}
+		for _, entry := range normalizedEntries {
+			entry.ID = 0
 			model.DB.Create(&entry)
 		}
 	}

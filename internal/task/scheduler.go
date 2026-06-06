@@ -434,7 +434,11 @@ func (s *Scheduler) RemoveEPGSourceTask(sourceID uint) {
 }
 
 // TriggerLiveSourceNow manually triggers a live source fetch immediately.
-func (s *Scheduler) TriggerLiveSourceNow(sourceID uint) {
+func (s *Scheduler) TriggerLiveSourceNow(sourceID uint) error {
+	run, err := s.liveService.PrepareFetchAndUpdate(sourceID)
+	if err != nil {
+		return err
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -442,16 +446,21 @@ func (s *Scheduler) TriggerLiveSourceNow(sourceID uint) {
 			}
 		}()
 		slog.Info("Manual trigger: fetching live source", "id", sourceID)
-		if err := s.liveService.FetchAndUpdate(sourceID); err != nil {
+		if err := run(); err != nil {
 			slog.Error("Manual trigger: failed to fetch live source", "id", sourceID, "error", err)
 		} else {
 			publish.InvalidateAll()
 		}
 	}()
+	return nil
 }
 
 // TriggerEPGSourceNow manually triggers an EPG source fetch immediately.
-func (s *Scheduler) TriggerEPGSourceNow(sourceID uint) {
+func (s *Scheduler) TriggerEPGSourceNow(sourceID uint) error {
+	run, err := s.epgService.PrepareFetchAndUpdate(sourceID)
+	if err != nil {
+		return err
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -459,12 +468,13 @@ func (s *Scheduler) TriggerEPGSourceNow(sourceID uint) {
 			}
 		}()
 		slog.Info("Manual trigger: fetching EPG source", "id", sourceID)
-		if err := s.epgService.FetchAndUpdate(sourceID); err != nil {
+		if err := run(); err != nil {
 			slog.Error("Manual trigger: failed to fetch EPG source", "id", sourceID, "error", err)
 		} else {
 			publish.InvalidateAll()
 		}
 	}()
+	return nil
 }
 
 // AddDetectTask adds or updates a scheduled task for channel detection.
@@ -504,7 +514,11 @@ func (s *Scheduler) CheckFFprobe() error {
 }
 
 // TriggerDetectNow manually triggers channel detection immediately.
-func (s *Scheduler) TriggerDetectNow(sourceID uint, strategy string) {
+func (s *Scheduler) TriggerDetectNow(sourceID uint, strategy string) error {
+	run, err := s.detectService.PrepareManualDetect(sourceID, strategy)
+	if err != nil {
+		return err
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -512,12 +526,13 @@ func (s *Scheduler) TriggerDetectNow(sourceID uint, strategy string) {
 			}
 		}()
 		slog.Info("Manual trigger: detecting channels for live source", "id", sourceID, "strategy", strategy)
-		if err := s.detectService.DetectChannels(sourceID, true, strategy); err != nil {
+		if err := run(); err != nil {
 			slog.Error("Manual trigger: failed to detect channels", "id", sourceID, "error", err)
 		} else {
 			publish.InvalidateAll()
 		}
 	}()
+	return nil
 }
 
 // --- GeoIP auto-update task ---

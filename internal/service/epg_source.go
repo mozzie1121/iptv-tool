@@ -24,28 +24,54 @@ func NewEPGSourceService() *EPGSourceService {
 
 // FetchAndUpdate fetches the EPG source data and updates the database
 func (s *EPGSourceService) FetchAndUpdate(sourceID uint) error {
+	run, err := s.PrepareFetchAndUpdate(sourceID)
+	if err != nil {
+		return err
+	}
+	return run()
+}
+
+// PrepareFetchAndUpdate claims the source for syncing and returns the work to run.
+// This lets manual API triggers report claim failures before starting a goroutine.
+func (s *EPGSourceService) PrepareFetchAndUpdate(sourceID uint) (func() error, error) {
 	var source model.EPGSource
 	if err := model.DB.First(&source, sourceID).Error; err != nil {
-		return fmt.Errorf("epg source %d not found: %w", sourceID, err)
+		return nil, fmt.Errorf("epg source %d not found: %w", sourceID, err)
 	}
 
 	if !source.Status {
-		return nil // Source is disabled, skip
+		return func() error { return nil }, nil // Source is disabled, skip
 	}
 
+	releaseSyncing, err := claimEPGSourceSyncing(sourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	return func() error {
+		return s.fetchAndUpdateClaimed(source, releaseSyncing)
+	}, nil
+}
+
+func claimEPGSourceSyncing(sourceID uint) (func(), error) {
 	claim := model.DB.Model(&model.EPGSource{}).
 		Where("id = ? AND is_syncing = ?", sourceID, false).
 		Update("is_syncing", true)
 	if claim.Error != nil {
-		return fmt.Errorf("failed to mark EPG source syncing: %w", claim.Error)
+		return nil, fmt.Errorf("failed to mark EPG source syncing: %w", claim.Error)
 	}
 	if claim.RowsAffected == 0 {
-		return fmt.Errorf("error.source_syncing")
+		return nil, fmt.Errorf("error.source_syncing")
 	}
+	return func() {
+		model.DB.Model(&model.EPGSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
+	}, nil
+}
 
+func (s *EPGSourceService) fetchAndUpdateClaimed(source model.EPGSource, releaseSyncing func()) error {
 	defer func() {
 		// Defensive cleanup
-		model.DB.Model(&model.EPGSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
+		releaseSyncing()
 	}()
 
 	var programs []epgpkg.Program
@@ -58,10 +84,10 @@ func (s *EPGSourceService) FetchAndUpdate(sourceID uint) error {
 		// Acquire per-LiveSourceID mutex to ensure mutual exclusion with the
 		// associated IPTV live source (IPTV servers reject concurrent auth)
 		if source.LiveSourceID != nil {
-			slog.Info("Acquiring IPTV lock for EPG source", "id", sourceID, "live_source_id", *source.LiveSourceID)
+			slog.Info("Acquiring IPTV lock for EPG source", "id", source.ID, "live_source_id", *source.LiveSourceID)
 			unlock := AcquireIPTVLock(*source.LiveSourceID)
 			defer unlock()
-			slog.Info("Acquired IPTV lock for EPG source", "id", sourceID, "live_source_id", *source.LiveSourceID)
+			slog.Info("Acquired IPTV lock for EPG source", "id", source.ID, "live_source_id", *source.LiveSourceID)
 		}
 		programs, fetchErr = s.fetchIPTVEPG(source)
 	default:

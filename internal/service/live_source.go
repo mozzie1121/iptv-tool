@@ -27,37 +27,63 @@ func NewLiveSourceService() *LiveSourceService {
 
 // FetchAndUpdate fetches the live source data and updates the database
 func (s *LiveSourceService) FetchAndUpdate(sourceID uint) error {
+	run, err := s.PrepareFetchAndUpdate(sourceID)
+	if err != nil {
+		return err
+	}
+	return run()
+}
+
+// PrepareFetchAndUpdate claims the source for syncing and returns the work to run.
+// This lets manual API triggers report claim failures before starting a goroutine.
+func (s *LiveSourceService) PrepareFetchAndUpdate(sourceID uint) (func() error, error) {
 	var source model.LiveSource
 	if err := model.DB.First(&source, sourceID).Error; err != nil {
-		return fmt.Errorf("live source %d not found: %w", sourceID, err)
+		return nil, fmt.Errorf("live source %d not found: %w", sourceID, err)
 	}
 
 	if !source.Status {
-		return nil // Source is disabled, skip
+		return func() error { return nil }, nil // Source is disabled, skip
 	}
 
+	releaseSyncing, err := claimLiveSourceSyncing(sourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	return func() error {
+		return s.fetchAndUpdateClaimed(source, releaseSyncing)
+	}, nil
+}
+
+func claimLiveSourceSyncing(sourceID uint) (func(), error) {
 	claim := model.DB.Model(&model.LiveSource{}).
 		Where("id = ? AND is_syncing = ?", sourceID, false).
 		Update("is_syncing", true)
 	if claim.Error != nil {
-		return fmt.Errorf("failed to mark live source syncing: %w", claim.Error)
+		return nil, fmt.Errorf("failed to mark live source syncing: %w", claim.Error)
 	}
 	if claim.RowsAffected == 0 {
-		return fmt.Errorf("error.source_syncing")
+		return nil, fmt.Errorf("error.source_syncing")
 	}
+	return func() {
+		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
+	}, nil
+}
 
+func (s *LiveSourceService) fetchAndUpdateClaimed(source model.LiveSource, releaseSyncing func()) error {
 	defer func() {
 		// Defensive cleanup
-		model.DB.Model(&model.LiveSource{}).Where("id = ?", sourceID).Update("is_syncing", false)
+		releaseSyncing()
 	}()
 
 	// For IPTV sources, acquire per-source mutex to prevent concurrent access
 	// with the associated IPTV EPG source (IPTV servers reject concurrent auth)
 	if source.Type == model.LiveSourceTypeIPTV {
-		slog.Info("Acquiring IPTV lock for live source", "id", sourceID)
-		unlock := AcquireIPTVLock(sourceID)
+		slog.Info("Acquiring IPTV lock for live source", "id", source.ID)
+		unlock := AcquireIPTVLock(source.ID)
 		defer unlock()
-		slog.Info("Acquired IPTV lock for live source", "id", sourceID)
+		slog.Info("Acquired IPTV lock for live source", "id", source.ID)
 	}
 
 	var channels []m3u.Channel

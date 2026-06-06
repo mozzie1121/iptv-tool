@@ -129,6 +129,14 @@ func (s *DetectService) getDetectConfig() (concurrency int, timeout int) {
 // manual=false: waits for syncing to finish (up to 10 minutes) before starting detection.
 // strategy: "unicast" or "multicast" — determines which URL to test for each channel.
 func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy string) error {
+	if manual {
+		run, err := s.PrepareManualDetect(sourceID, strategy)
+		if err != nil {
+			return err
+		}
+		return run()
+	}
+
 	var source model.LiveSource
 	if err := model.DB.First(&source, sourceID).Error; err != nil {
 		return fmt.Errorf("live source %d not found: %w", sourceID, err)
@@ -138,16 +146,9 @@ func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy stri
 		return nil // Source is disabled, skip
 	}
 
-	// Check syncing status
-	if manual {
-		if source.IsSyncing {
-			return fmt.Errorf("error.source_refreshing")
-		}
-	} else {
-		// Wait for syncing to finish (auto/scheduled mode)
-		if err := s.waitForSyncComplete(sourceID, 10*time.Minute); err != nil {
-			return err
-		}
+	// Wait for syncing to finish (auto/scheduled mode)
+	if err := s.waitForSyncComplete(sourceID, 10*time.Minute); err != nil {
+		return err
 	}
 
 	// Get ffprobe path
@@ -160,6 +161,43 @@ func (s *DetectService) DetectChannels(sourceID uint, manual bool, strategy stri
 	if err != nil {
 		return err
 	}
+
+	return s.detectChannelsClaimed(sourceID, strategy, ffprobePath, releaseDetecting)
+}
+
+// PrepareManualDetect claims a source for detection and returns the work to run.
+// It lets API triggers report claim failures before starting a goroutine.
+func (s *DetectService) PrepareManualDetect(sourceID uint, strategy string) (func() error, error) {
+	var source model.LiveSource
+	if err := model.DB.First(&source, sourceID).Error; err != nil {
+		return nil, fmt.Errorf("live source %d not found: %w", sourceID, err)
+	}
+
+	if !source.Status {
+		return func() error { return nil }, nil // Source is disabled, skip
+	}
+
+	if source.IsSyncing {
+		return nil, fmt.Errorf("error.source_refreshing")
+	}
+
+	releaseDetecting, err := claimSourceDetecting(sourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	ffprobePath, _, err := s.GetFFprobePath()
+	if err != nil {
+		releaseDetecting()
+		return nil, err
+	}
+
+	return func() error {
+		return s.detectChannelsClaimed(sourceID, strategy, ffprobePath, releaseDetecting)
+	}, nil
+}
+
+func (s *DetectService) detectChannelsClaimed(sourceID uint, strategy string, ffprobePath string, releaseDetecting func()) error {
 	defer releaseDetecting()
 
 	// Reset latency, video_codec, video_resolution, and detected_at for all channels in this source before detecting

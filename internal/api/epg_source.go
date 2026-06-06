@@ -400,7 +400,10 @@ func (ec *EPGSourceController) Trigger(c *gin.Context) {
 		return
 	}
 
-	ec.scheduler.TriggerEPGSourceNow(uint(id))
+	if err := ec.scheduler.TriggerEPGSourceNow(uint(id)); err != nil {
+		respondTriggerError(c, err)
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": i18n.T(i18n.Lang(c), "message.trigger_fetch")})
 }
 
