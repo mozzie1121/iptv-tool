@@ -146,21 +146,23 @@
     </el-dialog>
 
     <!-- Programs Drill-down Dialog -->
-    <el-dialog v-model="programsVisible" :title="$t('epg_sources.programs_title')" width="750px" destroy-on-close :close-on-click-modal="false">
+    <el-dialog v-model="programsVisible" :title="$t('epg_sources.programs_title')" width="820px" destroy-on-close :close-on-click-modal="false">
       <!-- Breadcrumb navigation -->
-      <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 4px; color: var(--el-text-color-regular); font-size: 14px">
+      <div class="programs-breadcrumb">
         <el-link underline="never" @click="drillLevel = 1" :type="drillLevel === 1 ? 'primary' : 'default'">
           {{ $t('epg_sources.channel_list') }}
         </el-link>
         <template v-if="drillLevel >= 2">
-          <span style="color: var(--el-text-color-placeholder)">/</span>
-          <el-link underline="never" @click="drillLevel = 2" :type="drillLevel === 2 ? 'primary' : 'default'">
-            {{ drillChannel }}
-          </el-link>
+          <span class="programs-breadcrumb-separator">/</span>
+          <el-tooltip :content="selectedChannelTooltip" placement="top" :show-after="300">
+            <el-link class="programs-breadcrumb-channel" underline="never" @click="drillLevel = 2" :type="drillLevel === 2 ? 'primary' : 'default'">
+              {{ selectedChannelLabel }}
+            </el-link>
+          </el-tooltip>
         </template>
         <template v-if="drillLevel === 3">
-          <span style="color: var(--el-text-color-placeholder)">/</span>
-          <el-link underline="never" type="primary">{{ drillDate }}</el-link>
+          <span class="programs-breadcrumb-separator">/</span>
+          <el-link class="programs-breadcrumb-date" underline="never" type="primary">{{ drillDate }}</el-link>
         </template>
       </div>
 
@@ -180,7 +182,7 @@
           <el-table-column prop="count" :label="$t('epg_sources.program_count')" width="140" />
           <el-table-column :label="$t('common.operations')" width="120" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="primary" link @click="drillToDate(row.channel)">{{ $t('epg_sources.col_view') }}</el-button>
+              <el-button size="small" type="primary" link @click="drillToDate(row)">{{ $t('epg_sources.col_view') }}</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -194,6 +196,19 @@
             size="small"
           />
         </div>
+      </div>
+
+      <div v-if="drillLevel >= 2" class="programs-context">
+        <span class="programs-context-label">{{ $t('epg_sources.col_channel_name') }}</span>
+        <el-tooltip :content="selectedChannelTooltip" placement="top" :show-after="300">
+          <span class="programs-context-name">{{ selectedChannelLabel }}</span>
+        </el-tooltip>
+        <span v-if="showSelectedChannelId" class="programs-context-meta">
+          {{ $t('common.col_channel_id') }}: {{ selectedChannelId }}
+        </span>
+        <span v-if="drillLevel === 3" class="programs-context-meta">
+          {{ $t('epg_sources.col_date') }}: {{ drillDate }}
+        </span>
       </div>
 
       <!-- Level 2: Date list -->
@@ -264,6 +279,7 @@ const programsSourceId = ref(null)
 const drillLevel = ref(1)
 const drillChannel = ref('')
 const drillDate = ref('')
+const selectedEpgChannel = ref({ channel: '', channel_name: '' })
 const drillLoading = ref(false)
 const epgChannels = ref([])
 const epgDates = ref([])
@@ -290,6 +306,20 @@ const paginatedEpgChannels = computed(() => {
   const start = (drillCurrentPage.value - 1) * drillPageSize.value
   const end = start + drillPageSize.value
   return filteredEpgChannels.value.slice(start, end)
+})
+
+const selectedChannelId = computed(() => selectedEpgChannel.value.channel || drillChannel.value)
+const selectedChannelLabel = computed(() => {
+  const name = (selectedEpgChannel.value.channel_name || '').trim()
+  return name || selectedChannelId.value
+})
+const showSelectedChannelId = computed(() => {
+  return Boolean(selectedChannelId.value && selectedChannelLabel.value !== selectedChannelId.value)
+})
+const selectedChannelTooltip = computed(() => {
+  if (!selectedChannelLabel.value) return ''
+  if (!showSelectedChannelId.value) return selectedChannelLabel.value
+  return `${selectedChannelLabel.value} (${t('common.col_channel_id')}: ${selectedChannelId.value})`
 })
 
 function handleSearchChange() {
@@ -502,6 +532,7 @@ async function showPrograms(row) {
   drillLevel.value = 1
   drillChannel.value = ''
   drillDate.value = ''
+  selectedEpgChannel.value = { channel: '', channel_name: '' }
   drillSearch.value = ''
   drillCurrentPage.value = 1
   programsVisible.value = true
@@ -518,8 +549,14 @@ async function loadEpgChannels() {
   } finally { drillLoading.value = false }
 }
 
-async function drillToDate(channel) {
+async function drillToDate(channelInfo) {
+  const channel = channelInfo.channel
+  selectedEpgChannel.value = {
+    channel,
+    channel_name: channelInfo.channel_name || '',
+  }
   drillChannel.value = channel
+  drillDate.value = ''
   drillLevel.value = 2
   drillLoading.value = true
   try {
@@ -552,3 +589,80 @@ function formatTime(t) {
   return d.toLocaleTimeString(locale.value === 'zh' ? 'zh-CN' : 'en-US', { hour: '2-digit', minute: '2-digit' })
 }
 </script>
+
+<style scoped>
+.programs-breadcrumb {
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.programs-breadcrumb-separator {
+  flex: 0 0 auto;
+  color: var(--el-text-color-placeholder);
+}
+
+.programs-breadcrumb-channel {
+  max-width: 180px;
+}
+
+.programs-breadcrumb-date {
+  max-width: 120px;
+}
+
+.programs-breadcrumb-channel :deep(.el-link__inner),
+.programs-breadcrumb-date :deep(.el-link__inner) {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.programs-context {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+  background: var(--el-fill-color-lighter);
+  font-size: 13px;
+}
+
+.programs-context-label,
+.programs-context-meta {
+  flex: 0 0 auto;
+  color: var(--el-text-color-secondary);
+}
+
+.programs-context-name {
+  min-width: 0;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-text-color-primary);
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .programs-breadcrumb-channel {
+    max-width: 120px;
+  }
+
+  .programs-context {
+    flex-wrap: wrap;
+  }
+
+  .programs-context-name {
+    max-width: 100%;
+  }
+}
+</style>
