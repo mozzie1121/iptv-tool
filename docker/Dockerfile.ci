@@ -1,0 +1,46 @@
+# ============================================================
+# Stage 1: Build frontend
+# ============================================================
+FROM --platform=$BUILDPLATFORM node:24-alpine AS frontend
+
+WORKDIR /build/web
+COPY web/package.json web/package-lock.json* ./
+RUN npm install
+COPY web/ ./
+RUN npm run build
+
+# ============================================================
+# Stage 2: Build Go backend
+# ============================================================
+FROM golang:1.26-alpine AS backend
+
+ARG VERSION=dev
+
+RUN apk add --no-cache git
+
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+COPY --from=frontend /build/web/dist ./web/dist
+
+RUN CGO_ENABLED=0 go build \
+    -ldflags "-s -w -X iptv-tool-v2/internal/version.Version=${VERSION}" \
+    -o /out/iptv-server \
+    ./cmd/iptv-server
+
+# ============================================================
+# Stage 3: Runtime
+# ============================================================
+FROM alpine:latest
+
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
+
+WORKDIR /app
+
+COPY --from=backend /out/iptv-server /app/iptv-server
+
+EXPOSE 8023
+
+ENTRYPOINT ["/app/iptv-server"]

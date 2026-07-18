@@ -1,0 +1,11 @@
+services:
+  iptv-tool:
+    image: super321/iptv-tool:latest
+    container_name: iptv-tool
+    volumes:
+      - data:/app/data
+    ports:
+      - "8023:8023"
+    restart: unless-stopped
+volumes:
+  data:

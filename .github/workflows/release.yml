@@ -1,36 +1,293 @@
-name: goreleaser
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      docker_only:
+        description: 'Only run Docker build & push (skip binary build and release)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
-  # id-token: write
-  # packages: write
+
+env:
+  BINARY_NAME: iptv-server
+  DOCKER_IMAGE: super321/iptv-tool
 
 jobs:
-  goreleaser:
+  # ============================================================
+  # Job 1: Build frontend + cross-compile Go binaries
+  # ============================================================
+  build:
+    if: ${{ !inputs.docker_only }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - name: Set up Go
-        uses: actions/setup-go@v5
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # ---------- Frontend ----------
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          go-version-file: 'go.mod'
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm install
+        working-directory: web
+
+      - name: Build frontend
+        run: npm run build
+        working-directory: web
+
+      # ---------- Go cross-compile ----------
+      - name: Setup Go
+        uses: actions/setup-go@v6
         with:
-          # either 'goreleaser' (default) or 'goreleaser-pro'
-          distribution: goreleaser
-          # 'latest', 'nightly', or a semver
-          version: '~> v2'
-          args: release --clean
+          go-version: '1.26'
+          check-latest: true
+
+      - name: Cross compile
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Your GoReleaser Pro key, if you are using the 'goreleaser-pro' distribution
-          # GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -e
+          LDFLAGS="-s -w -X iptv-tool-v2/internal/version.Version=${VERSION}"
+          OUTPUT_DIR="${GITHUB_WORKSPACE}/build"
+          mkdir -p "${OUTPUT_DIR}"
+
+          # Define target matrix
+          # Format: GOOS:GOARCH[:GOARM|GOMIPS_VARIANT]
+          # Note: mips* targets are excluded because the pure-Go SQLite driver
+          # (modernc.org/libc) does not support MIPS architectures.
+          # freebsd/arm is also excluded for the same reason.
+          TARGETS=(
+            # --- windows ---
+            "windows:amd64"
+            "windows:arm64"
+            # --- darwin ---
+            "darwin:amd64"
+            "darwin:arm64"
+            # --- linux ---
+            "linux:amd64"
+            "linux:arm64"
+            "linux:arm:5"
+            "linux:arm:6"
+            "linux:arm:7"
+            # --- freebsd ---
+            "freebsd:amd64"
+            "freebsd:arm64"
+          )
+
+          for target in "${TARGETS[@]}"; do
+            IFS=':' read -r GOOS GOARCH VARIANT <<< "${target}"
+
+            SUFFIX="${GOOS}-${GOARCH}"
+            EXTRA_ENV=""
+
+            # Determine arch-specific env vars
+            if [[ "${GOARCH}" == "arm" && -n "${VARIANT}" ]]; then
+              EXTRA_ENV="GOARM=${VARIANT}"
+              SUFFIX="${SUFFIX}v${VARIANT}"
+            fi
+
+            BIN_NAME="${BINARY_NAME}-${SUFFIX}"
+            [[ "${GOOS}" == "windows" ]] && BIN_NAME="${BIN_NAME}.exe"
+
+            echo "::group::Building ${BIN_NAME}"
+            env CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" ${EXTRA_ENV} \
+              go build -ldflags "${LDFLAGS}" -o "${OUTPUT_DIR}/${BIN_NAME}" ./cmd/iptv-server
+            echo "::endgroup::"
+          done
+
+          ls -lh "${OUTPUT_DIR}/"
+
+      - name: Package archives
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          set -e
+          BUILD_DIR="${GITHUB_WORKSPACE}/build"
+          DIST_DIR="${GITHUB_WORKSPACE}/dist"
+          mkdir -p "${DIST_DIR}"
+
+          cd "${BUILD_DIR}"
+          for bin in *; do
+            NAME="${bin%.*}"            # strip .exe if present
+            ARCHIVE_BASE="${NAME}_${VERSION}"
+
+            if [[ "${bin}" == *.exe ]]; then
+              # Windows: zip
+              zip -j "${DIST_DIR}/${ARCHIVE_BASE}.zip" "${bin}"
+            else
+              # Unix: tar.gz
+              tar czf "${DIST_DIR}/${ARCHIVE_BASE}.tar.gz" "${bin}"
+            fi
+          done
+
+          ls -lh "${DIST_DIR}/"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-archives
+          path: dist/*
+          retention-days: 1
+
+  # ============================================================
+  # Job 2: Generate changelog & create GitHub Release
+  # ============================================================
+  release:
+    needs: build
+    if: ${{ !inputs.docker_only }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          set -e
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          RELEASE_DATE=$(date -u +%Y-%m-%d)
+
+          # Find the previous tag
+          PREV_TAG=$(git tag --sort=-version:refname | grep '^v' | sed -n '2p' || true)
+
+          if [[ -z "${PREV_TAG}" ]]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          # Extract feat/fix/perf commits
+          FEAT_COMMITS=$(git log ${RANGE} --pretty=format:"- %s (%h)" --grep="^feat" --extended-regexp || true)
+          FIX_COMMITS=$(git log ${RANGE} --pretty=format:"- %s (%h)" --grep="^fix" --extended-regexp || true)
+          PERF_COMMITS=$(git log ${RANGE} --pretty=format:"- %s (%h)" --grep="^perf" --extended-regexp || true)
+
+          # Build changelog entry for this version
+          ENTRY="# ${VERSION} (${RELEASE_DATE})\n"
+
+          if [[ -n "${FEAT_COMMITS}" ]]; then
+            ENTRY="${ENTRY}\n## ✨ Features\n\n${FEAT_COMMITS}\n"
+          fi
+          if [[ -n "${FIX_COMMITS}" ]]; then
+            ENTRY="${ENTRY}\n## 🐛 Bug Fixes\n\n${FIX_COMMITS}\n"
+          fi
+          if [[ -n "${PERF_COMMITS}" ]]; then
+            ENTRY="${ENTRY}\n## ⚡ Performance\n\n${PERF_COMMITS}\n"
+          fi
+
+          # If no conventional commits found
+          if [[ -z "${FEAT_COMMITS}" && -z "${FIX_COMMITS}" && -z "${PERF_COMMITS}" ]]; then
+            ENTRY="${ENTRY}\nNo notable changes in this release.\n"
+          fi
+
+          # Prepend new entry to existing CHANGELOG.md (preserve history)
+          if [[ -f CHANGELOG.md ]]; then
+            EXISTING=$(cat CHANGELOG.md)
+            echo -e "${ENTRY}\n${EXISTING}" > CHANGELOG.md
+          else
+            echo -e "${ENTRY}" > CHANGELOG.md
+          fi
+          cat CHANGELOG.md
+
+          # Export for release body (only current version, not full history)
+          {
+            echo "BODY<<CHANGELOG_EOF"
+            echo -e "${ENTRY}"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit CHANGELOG.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update CHANGELOG.md for ${{ steps.version.outputs.VERSION }}" || true
+          git push origin HEAD:main || true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: release-archives
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Release ${{ steps.version.outputs.VERSION }}
+          body: ${{ steps.changelog.outputs.BODY }}
+          files: dist/*
+          draft: false
+          prerelease: false
+
+  # ============================================================
+  # Job 3: Build & push multi-arch Docker image
+  # ============================================================
+  docker:
+    needs: build
+    if: ${{ always() && (inputs.docker_only || needs.build.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: version
+        run: |
+          VERSION=$(git describe --tags --abbrev=0)
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ci
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          build-args: |
+            VERSION=${{ steps.version.outputs.VERSION }}
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ steps.version.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
